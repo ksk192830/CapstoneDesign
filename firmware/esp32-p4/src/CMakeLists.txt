@@ -8,5 +8,9 @@ idf_component_register(
         "."
         "camera"
         "network"
+    REQUIRES
+        esp_video
+        esp_hosted
+        esp_wifi_remote
 )
 

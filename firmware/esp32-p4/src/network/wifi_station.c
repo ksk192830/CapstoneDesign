@@ -3,10 +3,12 @@
 #include <string.h>
 
 #include "esp_check.h"
+#include "esp_hosted.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_wifi_remote.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "nvs_flash.h"
@@ -21,11 +23,17 @@ static int s_retry_count = 0;
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (event_base == WIFI_REMOTE_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_remote_connect();
+    } else if (event_base == WIFI_REMOTE_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "Wi-Fi associated with AP; waiting for DHCP IP");
+        printf("[OK] Wi-Fi associated with AP; waiting for DHCP IP\n");
+    } else if (event_base == WIFI_REMOTE_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "Wi-Fi disconnected, reason=%d", event != NULL ? event->reason : -1);
+        printf("[WARN] Wi-Fi disconnected, reason=%d\n", event != NULL ? event->reason : -1);
         if (s_retry_count < 5) {
-            esp_wifi_connect();
+            esp_wifi_remote_connect();
             s_retry_count++;
             ESP_LOGW(TAG, "Retrying Wi-Fi connection (%d/5)", s_retry_count);
         } else {
@@ -55,26 +63,30 @@ esp_err_t wifi_station_connect(void)
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Failed to initialize netif");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "Failed to create event loop");
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    ESP_RETURN_ON_FALSE(sta_netif != NULL, ESP_FAIL, TAG, "Failed to create default Wi-Fi STA netif");
+
+    ESP_LOGI(TAG, "Initializing ESP-Hosted transport");
+    ESP_RETURN_ON_ERROR((esp_err_t)esp_hosted_init(), TAG, "Failed to initialize ESP-Hosted");
+    ESP_RETURN_ON_ERROR((esp_err_t)esp_hosted_connect_to_slave(), TAG, "Failed to connect ESP-Hosted slave");
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "Failed to initialize Wi-Fi");
+    ESP_RETURN_ON_ERROR(esp_wifi_remote_init(&cfg), TAG, "Failed to initialize remote Wi-Fi");
 
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL), TAG, "Failed to register Wi-Fi event handler");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL), TAG, "Failed to register IP event handler");
+    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_REMOTE_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL), TAG, "Failed to register remote Wi-Fi event handler");
+    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL), TAG, "Failed to register IP event handler");
 
     wifi_config_t wifi_config = {0};
     strlcpy((char *)wifi_config.sta.ssid, WIFI_STA_SSID, sizeof(wifi_config.sta.ssid));
     strlcpy((char *)wifi_config.sta.password, WIFI_STA_PASSWORD, sizeof(wifi_config.sta.password));
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "Failed to set Wi-Fi mode");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "Failed to set Wi-Fi config");
-    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Failed to start Wi-Fi");
+    ESP_RETURN_ON_ERROR(esp_wifi_remote_set_mode(WIFI_MODE_STA), TAG, "Failed to set remote Wi-Fi mode");
+    ESP_RETURN_ON_ERROR(esp_wifi_remote_set_config(WIFI_IF_STA, &wifi_config), TAG, "Failed to set remote Wi-Fi config");
+    ESP_RETURN_ON_ERROR(esp_wifi_remote_start(), TAG, "Failed to start remote Wi-Fi");
 
-    ESP_LOGI(TAG, "Connecting to Wi-Fi SSID: %s", WIFI_STA_SSID);
+    ESP_LOGI(TAG, "Connecting to remote Wi-Fi SSID: %s", WIFI_STA_SSID);
 
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(20000));
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(60000));
     if (bits & WIFI_CONNECTED_BIT) {
         return ESP_OK;
     }
