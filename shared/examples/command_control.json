@@ -1,0 +1,12 @@
+{
+  "type": "control",
+  "seq": 1,
+  "timestamp": 0.0,
+  "mode": "manual",
+  "command": {
+    "motor_left": 0,
+    "motor_right": 0,
+    "servo_angle": 90
+  }
+}
+

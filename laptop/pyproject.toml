@@ -1,0 +1,13 @@
+[project]
+name = "machine-vision-client"
+version = "0.1.0"
+description = "Laptop-side vision and control client for ESP32-P4 machine project"
+requires-python = ">=3.10"
+dependencies = [
+  "opencv-python",
+  "websockets",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
