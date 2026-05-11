@@ -1,0 +1,4 @@
+dependencies:
+  espressif/esp_video: "^2.1.0"
+  espressif/esp_cam_sensor: "^2.1.0"
+
