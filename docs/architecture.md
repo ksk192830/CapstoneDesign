@@ -12,3 +12,8 @@ Initial communication plan:
 - Control: Laptop to ESP32 over WebSocket JSON.
 - Status: ESP32 to laptop over WebSocket JSON.
 
+Initial camera endpoints:
+
+- `GET /`: device status text.
+- `GET /capture.jpg`: single JPEG frame.
+- `GET /stream/visible.mjpeg`: MJPEG stream for OpenCV/browser viewing.

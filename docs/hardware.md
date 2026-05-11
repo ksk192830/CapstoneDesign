@@ -13,4 +13,3 @@ Record hardware details here as the design becomes fixed:
 - Wi-Fi module connection.
 - Power supply requirements.
 - Motor, servo, relay, or actuator pin map.
-

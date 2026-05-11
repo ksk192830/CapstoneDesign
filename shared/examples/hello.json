@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "type": "hello",
+  "seq": 1,
+  "timestamp_ms": 1000,
+  "payload": {
+    "client": "laptop",
+    "client_name": "machine_vision_client",
+    "requested_streams": ["visible"]
+  }
+}
+

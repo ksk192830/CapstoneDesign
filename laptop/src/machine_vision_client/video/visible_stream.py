@@ -1,3 +1,2 @@
 class VisibleStream:
     pass
-

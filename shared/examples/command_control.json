@@ -1,12 +1,18 @@
 {
+  "version": 1,
   "type": "control",
-  "seq": 1,
-  "timestamp": 0.0,
-  "mode": "manual",
-  "command": {
-    "motor_left": 0,
-    "motor_right": 0,
-    "servo_angle": 90
+  "seq": 10,
+  "timestamp_ms": 123456,
+  "payload": {
+    "mode": "manual",
+    "ttl_ms": 300,
+    "motors": {
+      "left": 0,
+      "right": 0
+    },
+    "servos": {
+      "camera_pan": 90,
+      "camera_tilt": 90
+    }
   }
 }
-

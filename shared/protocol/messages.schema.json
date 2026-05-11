@@ -1,20 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ESP32-P4 Machine Protocol Message",
+  "title": "ESP32-P4 Machine Protocol v1 WebSocket Message",
   "type": "object",
-  "required": ["type", "seq"],
+  "required": ["version", "type", "seq", "payload"],
   "properties": {
+    "version": {
+      "const": 1
+    },
     "type": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "hello",
+        "hello_ack",
+        "control",
+        "stop",
+        "emergency_stop",
+        "set_mode",
+        "status",
+        "ack",
+        "error",
+        "ping",
+        "pong"
+      ]
     },
     "seq": {
       "type": "integer",
       "minimum": 0
     },
-    "timestamp": {
+    "timestamp_ms": {
       "type": "number"
+    },
+    "payload": {
+      "type": "object"
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }
-

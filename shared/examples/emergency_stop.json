@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "type": "emergency_stop",
+  "seq": 11,
+  "timestamp_ms": 123600,
+  "payload": {
+    "reason": "operator_request"
+  }
+}
+
