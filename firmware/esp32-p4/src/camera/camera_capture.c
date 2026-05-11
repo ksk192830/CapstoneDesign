@@ -172,12 +172,24 @@ esp_err_t camera_capture_init(void)
 
 esp_err_t camera_capture_grab_once(void)
 {
-    if (s_video_fd < 0) {
+    camera_frame_t frame = {0};
+    esp_err_t ret = camera_capture_get_frame(&frame);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Captured frame: index=%lu bytes=%u", frame.index, frame.length);
+    return camera_capture_release_frame(&frame);
+}
+
+esp_err_t camera_capture_get_frame(camera_frame_t *frame)
+{
+    if (s_video_fd < 0 || !s_streaming) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!s_streaming) {
-        return ESP_ERR_INVALID_STATE;
+    if (frame == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     struct v4l2_buffer buffer = {
@@ -190,7 +202,29 @@ esp_err_t camera_capture_grab_once(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Captured frame: index=%lu bytes=%lu", buffer.index, buffer.bytesused);
+    if (buffer.index >= CAMERA_BUFFER_COUNT || s_buffers[buffer.index].start == NULL) {
+        ESP_LOGE(TAG, "Invalid captured buffer index=%lu", buffer.index);
+        return ESP_FAIL;
+    }
+
+    frame->data = s_buffers[buffer.index].start;
+    frame->length = buffer.bytesused;
+    frame->index = buffer.index;
+
+    return ESP_OK;
+}
+
+esp_err_t camera_capture_release_frame(const camera_frame_t *frame)
+{
+    if (s_video_fd < 0 || frame == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    struct v4l2_buffer buffer = {
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
+        .index = frame->index,
+    };
 
     if (ioctl(s_video_fd, VIDIOC_QBUF, &buffer) != 0) {
         ESP_LOGE(TAG, "VIDIOC_QBUF failed: errno=%d (%s)", errno, strerror(errno));
