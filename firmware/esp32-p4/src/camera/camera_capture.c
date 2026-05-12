@@ -16,7 +16,7 @@
 #include "linux/videodev2.h"
 
 static const char *TAG = "camera_capture";
-#define CAMERA_BUFFER_COUNT 2
+#define CAMERA_BUFFER_COUNT 3
 
 typedef struct {
     void *start;
@@ -36,10 +36,10 @@ static esp_err_t log_video_capabilities(int fd)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Video driver: %s", capability.driver);
-    ESP_LOGI(TAG, "Video card: %s", capability.card);
-    ESP_LOGI(TAG, "Bus info: %s", capability.bus_info);
-    ESP_LOGI(TAG, "Capabilities: 0x%08lx", capability.capabilities);
+    ESP_LOGD(TAG, "Video driver: %s", capability.driver);
+    ESP_LOGD(TAG, "Video card: %s", capability.card);
+    ESP_LOGD(TAG, "Bus info: %s", capability.bus_info);
+    ESP_LOGD(TAG, "Capabilities: 0x%08lx", capability.capabilities);
 
     return ESP_OK;
 }
@@ -55,7 +55,7 @@ static esp_err_t log_video_format(int fd)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "Frame format: %lux%lu fourcc=0x%08lx size=%lu bytes",
              format.fmt.pix.width,
              format.fmt.pix.height,
@@ -110,7 +110,7 @@ static esp_err_t init_capture_buffers(int fd)
         }
     }
 
-    ESP_LOGI(TAG, "Allocated %lu capture buffers", CAMERA_BUFFER_COUNT);
+    ESP_LOGD(TAG, "Allocated %lu capture buffers", CAMERA_BUFFER_COUNT);
     return ESP_OK;
 }
 
@@ -124,7 +124,7 @@ static esp_err_t start_streaming(int fd)
     }
 
     s_streaming = true;
-    ESP_LOGI(TAG, "Camera streaming started");
+    ESP_LOGD(TAG, "Camera streaming started");
     return ESP_OK;
 }
 
@@ -166,7 +166,7 @@ esp_err_t camera_capture_init(void)
     ESP_RETURN_ON_ERROR(init_capture_buffers(s_video_fd), TAG, "Failed to initialize capture buffers");
     ESP_RETURN_ON_ERROR(start_streaming(s_video_fd), TAG, "Failed to start camera streaming");
 
-    ESP_LOGI(TAG, "Camera initialized on %s", CAMERA_VIDEO_DEVICE);
+    ESP_LOGD(TAG, "Camera initialized on %s", CAMERA_VIDEO_DEVICE);
     return ESP_OK;
 }
 
@@ -178,7 +178,7 @@ esp_err_t camera_capture_grab_once(void)
         return ret;
     }
 
-    ESP_LOGI(TAG, "Captured frame: index=%lu bytes=%u", frame.index, frame.length);
+    ESP_LOGD(TAG, "Captured frame: index=%lu bytes=%u", frame.index, frame.length);
     return camera_capture_release_frame(&frame);
 }
 
