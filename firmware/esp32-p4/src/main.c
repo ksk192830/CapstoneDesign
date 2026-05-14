@@ -1,5 +1,6 @@
 #include "camera_capture.h"
 #include "http_camera_server.h"
+#include "thermal_task.h"
 #include "wifi_station.h"
 
 #include <stdio.h>
@@ -31,6 +32,14 @@ void app_main(void)
 
     printf("[WIFI] connected\n");
 
+    ret = thermal_task_start();
+    if (ret != ESP_OK) {
+        printf("[WARN] thermal task start failed: %s -- continuing without thermal\n",
+               esp_err_to_name(ret));
+    } else {
+        printf("[THERMAL] reader task running\n");
+    }
+
     ret = camera_capture_init();
     if (ret != ESP_OK) {
         printf("[ERROR] Camera init failed: %s\n", esp_err_to_name(ret));
@@ -46,6 +55,7 @@ void app_main(void)
     const char *ip = wifi_station_get_ip_string();
     printf("[READY] open: http://%s/\n", ip);
     printf("[READY] stream: http://%s/stream.mjpg\n", ip);
+    printf("[READY] thermal: http://%s/thermal/frame\n", ip);
 
     stay_alive();
 }

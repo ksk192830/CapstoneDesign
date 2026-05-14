@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "MLX90640_API.c"
+        "MLX90640_I2C_Driver.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "../../src/thermal"
+    REQUIRES
+        esp_driver_i2c
+        esp_driver_gpio
+        log
+)

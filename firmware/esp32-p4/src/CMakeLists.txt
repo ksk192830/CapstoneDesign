@@ -4,13 +4,19 @@ idf_component_register(
         "camera/camera_capture.c"
         "network/http_camera_server.c"
         "network/wifi_station.c"
+        "thermal/thermal_task.c"
     INCLUDE_DIRS
         "."
         "camera"
         "network"
+        "thermal"
     REQUIRES
         esp_video
         esp_hosted
         esp_wifi_remote
+        esp_driver_i2c
+        esp_driver_gpio
+        esp_http_server
+        esp_timer
+        mlx90640
 )
-

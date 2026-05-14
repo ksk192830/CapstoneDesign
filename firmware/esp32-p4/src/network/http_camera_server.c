@@ -1,5 +1,6 @@
 #include "http_camera_server.h"
 
+#include <math.h>
 #include <stdio.h>
 
 #include "camera_capture.h"
@@ -8,6 +9,7 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "thermal_task.h"
 
 enum {
     CAMERA_STREAM_WIDTH = 800,
@@ -210,10 +212,66 @@ static esp_err_t stream_mjpg_handler(httpd_req_t *req)
     }
 }
 
+static esp_err_t thermal_frame_handler(httpd_req_t *req)
+{
+    thermal_frame_t f;
+    esp_err_t err = thermal_task_get_latest(&f);
+    if (err == ESP_ERR_NOT_FOUND) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        const char *body = "{\"event\":\"warming_up\"}";
+        return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    }
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "thermal unavailable");
+        return err;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    char head[48];
+    int hlen = snprintf(head, sizeof(head),
+                        "{\"ts\":%lu,\"temps_c\":[",
+                        (unsigned long)f.ts_ms);
+    if (hlen < 0 || hlen >= (int)sizeof(head)) return ESP_FAIL;
+    if (httpd_resp_send_chunk(req, head, hlen) != ESP_OK) return ESP_FAIL;
+
+    char chunk[1024];
+    int chunk_len = 0;
+    for (int i = 0; i < MLX_PIXELS; ++i) {
+        const float v = f.temps_c[i];
+        const float safe = isfinite(v) ? v : 0.0f;
+        const char *fmt = (i == MLX_PIXELS - 1) ? "%.2f" : "%.2f,";
+
+        int wrote = snprintf(chunk + chunk_len,
+                             sizeof(chunk) - chunk_len,
+                             fmt, (double)safe);
+        if (wrote < 0 || wrote >= (int)(sizeof(chunk) - chunk_len)) {
+            if (chunk_len > 0) {
+                if (httpd_resp_send_chunk(req, chunk, chunk_len) != ESP_OK) return ESP_FAIL;
+                chunk_len = 0;
+            }
+            wrote = snprintf(chunk, sizeof(chunk), fmt, (double)safe);
+            if (wrote < 0 || wrote >= (int)sizeof(chunk)) return ESP_FAIL;
+        }
+        chunk_len += wrote;
+    }
+    if (chunk_len > 0) {
+        if (httpd_resp_send_chunk(req, chunk, chunk_len) != ESP_OK) return ESP_FAIL;
+    }
+
+    if (httpd_resp_send_chunk(req, "]}", 2) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(req, NULL, 0);  /* end of chunked response */
+}
+
 esp_err_t http_camera_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
+    /* thermal_frame_handler keeps a 3 KB thermal_frame_t on the stack
+     * plus a 1 KB JSON chunk buffer; the 4 KB default overflows. */
+    config.stack_size = 8192;
 
     httpd_handle_t server = NULL;
     esp_err_t ret = httpd_start(&server, &config);
@@ -242,11 +300,17 @@ esp_err_t http_camera_server_start(void)
         .method = HTTP_GET,
         .handler = stream_mjpg_handler,
     };
+    const httpd_uri_t thermal_frame_uri = {
+        .uri = "/thermal/frame",
+        .method = HTTP_GET,
+        .handler = thermal_frame_handler,
+    };
 
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &root_uri), TAG, "Failed to register /");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &capture_raw_uri), TAG, "Failed to register raw capture");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &capture_jpg_uri), TAG, "Failed to register jpg capture");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &stream_mjpg_uri), TAG, "Failed to register MJPEG stream");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &thermal_frame_uri), TAG, "Failed to register /thermal/frame");
 
     ESP_LOGD(TAG, "HTTP camera server started on port %d", config.server_port);
     return ESP_OK;
