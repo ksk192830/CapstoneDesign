@@ -42,15 +42,18 @@ static void thermal_reader_task(void *arg)
 {
     (void)arg;
 
-    if (MLX90640_DumpEE(MLX_I2C_ADDR, s_eeprom) != 0) {
-        ESP_LOGE(TAG, "DumpEE failed");
-        vTaskDelete(NULL);
-        return;
-    }
-    if (MLX90640_ExtractParameters(s_eeprom, &s_params) != 0) {
-        ESP_LOGE(TAG, "ExtractParameters failed");
-        vTaskDelete(NULL);
-        return;
+    while (true) {
+        if (MLX90640_DumpEE(MLX_I2C_ADDR, s_eeprom) != 0) {
+            ESP_LOGW(TAG, "DumpEE failed; retrying in 1s");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        if (MLX90640_ExtractParameters(s_eeprom, &s_params) != 0) {
+            ESP_LOGW(TAG, "ExtractParameters failed; retrying in 1s");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        break;
     }
 
     MLX90640_SetRefreshRate(MLX_I2C_ADDR, rate_code_from_hz(MLX_REFRESH_HZ));

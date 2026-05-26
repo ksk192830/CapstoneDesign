@@ -61,9 +61,13 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<title>ESP32-P4 Camera</title>"
         "<style>"
         "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }"
-        ".container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }"
+        ".container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }"
         "h1 { color: #333; text-align: center; }"
-        "img { display: block; width: 100%; border: 2px solid #ddd; border-radius: 4px; margin: 20px 0; background: #000; }"
+        ".views { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }"
+        ".panel { min-width: 0; }"
+        ".panel h2 { margin: 0 0 8px; font-size: 18px; color: #333; }"
+        "img, canvas { display: block; width: 100%; border: 2px solid #ddd; border-radius: 4px; background: #000; }"
+        "#thermal { aspect-ratio: 3 / 4; image-rendering: pixelated; }"
         ".info { color: #666; text-align: center; }"
         ".status { padding: 10px; margin: 10px 0; border-radius: 4px; text-align: center; }"
         ".status.ok { background: #d4edda; color: #155724; }"
@@ -74,10 +78,65 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<body>"
         "<div class='container'>"
         "<h1>ESP32-P4 Camera Stream</h1>"
-        "<img id='stream' src='/stream.mjpg' width='800' height='640' alt='camera stream'>"
-        "<div class='status ok' id='status'>Connecting...</div>"
-        "<div class='info'>Resolution: 800x640 | Format: MJPEG | Speed priority</div>"
+        "<div class='views'>"
+        "<div class='panel'>"
+        "<h2>Visible Camera</h2>"
+        "<img id='stream' width='800' height='640' alt='camera stream'>"
         "</div>"
+        "<div class='panel'>"
+        "<h2>Thermal Camera</h2>"
+        "<canvas id='thermal' width='24' height='32'></canvas>"
+        "</div>"
+        "</div>"
+        "<div class='status ok' id='status'>Connecting...</div>"
+        "<div class='info' id='thermalInfo'>Visible: 800x640 MJPEG | Thermal: waiting</div>"
+        "</div>"
+        "<script>"
+        "const canvas=document.getElementById('thermal');"
+        "const ctx=canvas.getContext('2d');"
+        "const statusEl=document.getElementById('status');"
+        "const thermalInfo=document.getElementById('thermalInfo');"
+        "document.getElementById('stream').src=location.protocol+'//'+location.hostname+':81/stream.mjpg';"
+        "function color(t){"
+        " const x=Math.max(0,Math.min(1,t));"
+        " const r=Math.round(255*Math.min(1,Math.max(0,1.5*x-0.15)));"
+        " const g=Math.round(255*Math.min(1,Math.max(0,1.5-3*Math.abs(x-0.5))));"
+        " const b=Math.round(255*Math.min(1,Math.max(0,1.2-1.8*x)));"
+        " return [r,g,b];"
+        "}"
+        "async function drawThermal(){"
+        " try{"
+        "  const res=await fetch('/thermal/frame',{cache:'no-store'});"
+        "  if(!res.ok) throw new Error('HTTP '+res.status);"
+        "  const data=await res.json();"
+        "  if(!data.temps_c){"
+        "   statusEl.className='status ok';"
+        "   statusEl.textContent='Thermal warming up...';"
+        "   return;"
+        "  }"
+        "  const temps=data.temps_c;"
+        "  let min=Infinity,max=-Infinity;"
+        "  for(const v of temps){ if(Number.isFinite(v)){ if(v<min)min=v; if(v>max)max=v; } }"
+        "  const span=Math.max(1,max-min);"
+        "  const img=ctx.createImageData(24,32);"
+        "  for(let i=0;i<768;i++){"
+        "   const [r,g,b]=color((temps[i]-min)/span);"
+        "   const x=i%32,y=Math.floor(i/32);"
+        "   const p=(((31-x)*24)+(23-y))*4;"
+        "   img.data[p]=r; img.data[p+1]=g; img.data[p+2]=b; img.data[p+3]=255;"
+        "  }"
+        "  ctx.putImageData(img,0,0);"
+        "  statusEl.className='status ok';"
+        "  statusEl.textContent='Connected';"
+        "  thermalInfo.textContent='Visible: 800x640 MJPEG | Thermal: '+min.toFixed(1)+'C - '+max.toFixed(1)+'C';"
+        " }catch(e){"
+        "  statusEl.className='status error';"
+        "  statusEl.textContent='Thermal unavailable: '+e.message;"
+        " }"
+        "}"
+        "setInterval(drawThermal,250);"
+        "drawThermal();"
+        "</script>"
         "</body>"
         "</html>";
 
@@ -280,8 +339,26 @@ esp_err_t http_camera_server_start(void)
         return ret;
     }
 
+    httpd_config_t stream_config = HTTPD_DEFAULT_CONFIG();
+    stream_config.server_port = 81;
+    stream_config.ctrl_port = config.ctrl_port + 1;
+    stream_config.stack_size = 8192;
+
+    httpd_handle_t stream_server = NULL;
+    ret = httpd_start(&stream_server, &stream_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start stream HTTP server: %s", esp_err_to_name(ret));
+        httpd_stop(server);
+        return ret;
+    }
+
     const httpd_uri_t root_uri = {
         .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_handler,
+    };
+    const httpd_uri_t thermal_uri = {
+        .uri = "/thermal",
         .method = HTTP_GET,
         .handler = root_handler,
     };
@@ -307,11 +384,14 @@ esp_err_t http_camera_server_start(void)
     };
 
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &root_uri), TAG, "Failed to register /");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &thermal_uri), TAG, "Failed to register /thermal");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &capture_raw_uri), TAG, "Failed to register raw capture");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &capture_jpg_uri), TAG, "Failed to register jpg capture");
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &stream_mjpg_uri), TAG, "Failed to register MJPEG stream");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(stream_server, &stream_mjpg_uri), TAG, "Failed to register MJPEG stream");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &thermal_frame_uri), TAG, "Failed to register /thermal/frame");
 
-    ESP_LOGD(TAG, "HTTP camera server started on port %d", config.server_port);
+    ESP_LOGD(TAG, "HTTP camera server started on port %d, stream port %d",
+             config.server_port,
+             stream_config.server_port);
     return ESP_OK;
 }

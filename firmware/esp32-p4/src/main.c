@@ -79,8 +79,8 @@ void app_main(void)
 
     const char *ip = wifi_station_get_ip_string();
     printf("[READY] open: http://%s/\n", ip);
-    printf("[READY] stream: http://%s/stream.mjpg\n", ip);
-    printf("[READY] thermal: http://%s/thermal/frame\n", ip);
+    printf("[READY] stream: http://%s:81/stream.mjpg\n", ip);
+    printf("[READY] thermal: http://%s/thermal\n", ip);
 
     stay_alive();
 }
