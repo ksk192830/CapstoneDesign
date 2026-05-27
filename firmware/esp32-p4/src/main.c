@@ -1,5 +1,6 @@
 #include "camera_capture.h"
 #include "http_camera_server.h"
+#include "motor_control.h"
 #include "thermal_task.h"
 #include "wifi_station.h"
 
@@ -56,6 +57,19 @@ void app_main(void)
     }
 
     printf("[WIFI] connected\n");
+    const char *ip = wifi_station_get_ip_string();
+    printf("[READY] open: http://%s/\n", ip);
+    printf("[READY] stream: http://%s:81/stream.mjpg\n", ip);
+    printf("[READY] thermal: http://%s/thermal\n", ip);
+    printf("[MOTOR] init starts in 3 seconds\n");
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    ret = motor_control_init();
+    if (ret != ESP_OK) {
+        printf("[ERROR] Motor control init failed: %s\n", esp_err_to_name(ret));
+        stay_alive();
+    }
+    printf("[MOTOR] manual control ready\n");
 
     ret = thermal_task_start();
     if (ret != ESP_OK) {
@@ -76,11 +90,6 @@ void app_main(void)
         printf("[ERROR] HTTP server failed: %s\n", esp_err_to_name(ret));
         stay_alive();
     }
-
-    const char *ip = wifi_station_get_ip_string();
-    printf("[READY] open: http://%s/\n", ip);
-    printf("[READY] stream: http://%s:81/stream.mjpg\n", ip);
-    printf("[READY] thermal: http://%s/thermal\n", ip);
 
     stay_alive();
 }

@@ -2,12 +2,14 @@ idf_component_register(
     SRCS
         "main.c"
         "camera/camera_capture.c"
+        "control/motor_control.c"
         "network/http_camera_server.c"
         "network/wifi_station.c"
         "thermal/thermal_task.c"
     INCLUDE_DIRS
         "."
         "camera"
+        "control"
         "network"
         "thermal"
     REQUIRES
@@ -16,6 +18,7 @@ idf_component_register(
         esp_wifi_remote
         esp_driver_i2c
         esp_driver_gpio
+        esp_driver_ledc
         esp_http_server
         esp_timer
         mlx90640

@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "camera_capture.h"
 #include "driver/jpeg_encode.h"
@@ -9,6 +10,7 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "motor_control.h"
 #include "thermal_task.h"
 
 enum {
@@ -73,6 +75,13 @@ static esp_err_t root_handler(httpd_req_t *req)
         ".status.ok { background: #d4edda; color: #155724; }"
         ".status.error { background: #f8d7da; color: #721c24; }"
         ".fps { font-weight: bold; color: #007bff; }"
+        ".control { margin-top: 18px; padding-top: 16px; border-top: 1px solid #ddd; }"
+        ".control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: stretch; }"
+        ".keys { display: grid; grid-template-columns: repeat(3, 54px); gap: 8px; justify-content: center; align-content: center; }"
+        ".key { height: 42px; border: 1px solid #bbb; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; background: #f7f7f7; color: #333; }"
+        ".key.active { background: #007bff; border-color: #0056b3; color: white; }"
+        ".readout { font-family: monospace; font-size: 14px; line-height: 1.5; background: #111; color: #d7ffd7; padding: 12px; border-radius: 6px; min-height: 116px; white-space: pre-wrap; }"
+        ".hint { color: #555; text-align: center; margin: 8px 0 0; }"
         "</style>"
         "</head>"
         "<body>"
@@ -90,12 +99,29 @@ static esp_err_t root_handler(httpd_req_t *req)
         "</div>"
         "<div class='status ok' id='status'>Connecting...</div>"
         "<div class='info' id='thermalInfo'>Visible: 800x640 MJPEG | Thermal: waiting</div>"
+        "<div class='control'>"
+        "<h2>Manual Drive</h2>"
+        "<div class='control-grid'>"
+        "<div>"
+        "<div class='keys'>"
+        "<div class='key' id='key-q'>Q</div><div class='key' id='key-w'>W</div><div class='key' id='key-e'>E</div>"
+        "<div class='key' id='key-a'>A</div><div class='key' id='key-s'>S</div><div class='key' id='key-d'>D</div>"
+        "</div>"
+        "<div class='hint'>W/S forward/back, A/D strafe, Q/E rotate</div>"
+        "</div>"
+        "<div class='readout' id='driveInfo'>Drive idle</div>"
+        "</div>"
+        "</div>"
         "</div>"
         "<script>"
         "const canvas=document.getElementById('thermal');"
         "const ctx=canvas.getContext('2d');"
         "const statusEl=document.getElementById('status');"
         "const thermalInfo=document.getElementById('thermalInfo');"
+        "const driveInfo=document.getElementById('driveInfo');"
+        "const pressed=new Set();"
+        "let driveTimer=null;"
+        "let stopSent=true;"
         "document.getElementById('stream').src=location.protocol+'//'+location.hostname+':81/stream.mjpg';"
         "function color(t){"
         " const x=Math.max(0,Math.min(1,t));"
@@ -136,6 +162,56 @@ static esp_err_t root_handler(httpd_req_t *req)
         "}"
         "setInterval(drawThermal,250);"
         "drawThermal();"
+        "function driveVector(){"
+        " let x=0,y=0,r=0;"
+        " if(pressed.has('w')) y+=1;"
+        " if(pressed.has('s')) y-=1;"
+        " if(pressed.has('d')) x+=1;"
+        " if(pressed.has('a')) x-=1;"
+        " if(pressed.has('q')) r+=1;"
+        " if(pressed.has('e')) r-=1;"
+        " const m=Math.max(1,Math.abs(x),Math.abs(y),Math.abs(r));"
+        " return {x:x/m,y:y/m,r:r/m};"
+        "}"
+        "function updateKeys(){"
+        " for(const k of ['q','w','e','a','s','d']){"
+        "  const el=document.getElementById('key-'+k);"
+        "  if(el) el.classList.toggle('active',pressed.has(k));"
+        " }"
+        "}"
+        "async function sendDrive(){"
+        " const v=driveVector();"
+        " const moving=Math.abs(v.x)+Math.abs(v.y)+Math.abs(v.r)>0;"
+        " try{"
+        "  if(moving){"
+        "   stopSent=false;"
+        "   const url='/control/manual?x='+v.x.toFixed(2)+'&y='+v.y.toFixed(2)+'&r='+v.r.toFixed(2)+'&ttl=300';"
+        "   const res=await fetch(url,{cache:'no-store'});"
+        "   if(!res.ok) throw new Error('HTTP '+res.status);"
+        "  }else if(!stopSent){"
+        "   stopSent=true;"
+        "   const res=await fetch('/control/stop',{cache:'no-store'});"
+        "   if(!res.ok) throw new Error('HTTP '+res.status);"
+        "  }"
+        "  const st=await fetch('/control/status',{cache:'no-store'}).then(r=>r.json());"
+        "  driveInfo.textContent='active: '+st.active+'\\nvector x/y/r: '+st.x.toFixed(2)+' / '+st.y.toFixed(2)+' / '+st.r.toFixed(2)+'\\nwheels FL/FR/BL/BR: '+st.wheels.fl.toFixed(2)+' / '+st.wheels.fr.toFixed(2)+' / '+st.wheels.bl.toFixed(2)+' / '+st.wheels.br.toFixed(2)+'\\nenc FL/FR/BL/BR: '+st.encoders.fl+' / '+st.encoders.fr+' / '+st.encoders.bl+' / '+st.encoders.br;"
+        " }catch(e){"
+        "  driveInfo.textContent='Drive error: '+e.message;"
+        " }"
+        "}"
+        "function ensureDriveTimer(){"
+        " if(!driveTimer) driveTimer=setInterval(sendDrive,80);"
+        "}"
+        "document.addEventListener('keydown',e=>{"
+        " const k=e.key.toLowerCase();"
+        " if(['q','w','e','a','s','d'].includes(k)){ e.preventDefault(); pressed.add(k); updateKeys(); ensureDriveTimer(); sendDrive(); }"
+        "});"
+        "document.addEventListener('keyup',e=>{"
+        " const k=e.key.toLowerCase();"
+        " if(['q','w','e','a','s','d'].includes(k)){ e.preventDefault(); pressed.delete(k); updateKeys(); sendDrive(); }"
+        "});"
+        "window.addEventListener('blur',()=>{ pressed.clear(); updateKeys(); sendDrive(); });"
+        "setInterval(sendDrive,500);"
         "</script>"
         "</body>"
         "</html>";
@@ -324,6 +400,112 @@ static esp_err_t thermal_frame_handler(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);  /* end of chunked response */
 }
 
+static bool query_float(const char *query, const char *key, float *out)
+{
+    char value[24];
+    if (httpd_query_key_value(query, key, value, sizeof(value)) != ESP_OK) {
+        return false;
+    }
+
+    char *end = NULL;
+    const float parsed = strtof(value, &end);
+    if (end == value) {
+        return false;
+    }
+
+    *out = parsed;
+    return true;
+}
+
+static bool query_u32(const char *query, const char *key, uint32_t *out)
+{
+    char value[24];
+    if (httpd_query_key_value(query, key, value, sizeof(value)) != ESP_OK) {
+        return false;
+    }
+
+    char *end = NULL;
+    const unsigned long parsed = strtoul(value, &end, 10);
+    if (end == value) {
+        return false;
+    }
+
+    *out = (uint32_t)parsed;
+    return true;
+}
+
+static esp_err_t control_manual_handler(httpd_req_t *req)
+{
+    char query[128] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing query");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    motor_control_manual_cmd_t cmd = {
+        .ttl_ms = 300,
+    };
+    if (!query_float(query, "x", &cmd.x) ||
+        !query_float(query, "y", &cmd.y) ||
+        !query_float(query, "r", &cmd.r)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing x, y, or r");
+        return ESP_ERR_INVALID_ARG;
+    }
+    (void)query_u32(query, "ttl", &cmd.ttl_ms);
+
+    esp_err_t ret = motor_control_set_manual(&cmd);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "manual command failed");
+        return ret;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t control_stop_handler(httpd_req_t *req)
+{
+    motor_control_stop();
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t control_status_handler(httpd_req_t *req)
+{
+    motor_control_status_t st = {0};
+    motor_control_get_status(&st);
+
+    char body[384];
+    const int len = snprintf(body,
+                             sizeof(body),
+                             "{\"active\":%s,\"age_ms\":%lu,"
+                             "\"x\":%.3f,\"y\":%.3f,\"r\":%.3f,"
+                             "\"wheels\":{\"fl\":%.3f,\"fr\":%.3f,\"bl\":%.3f,\"br\":%.3f},"
+                             "\"encoders\":{\"fl\":%lld,\"fr\":%lld,\"bl\":%lld,\"br\":%lld}}",
+                             st.active ? "true" : "false",
+                             (unsigned long)st.age_ms,
+                             (double)st.x,
+                             (double)st.y,
+                             (double)st.r,
+                             (double)st.wheel_fl,
+                             (double)st.wheel_fr,
+                             (double)st.wheel_bl,
+                             (double)st.wheel_br,
+                             (long long)st.enc_fl,
+                             (long long)st.enc_fr,
+                             (long long)st.enc_bl,
+                             (long long)st.enc_br);
+    if (len <= 0 || len >= (int)sizeof(body)) {
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, body, len);
+}
+
 esp_err_t http_camera_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -382,6 +564,21 @@ esp_err_t http_camera_server_start(void)
         .method = HTTP_GET,
         .handler = thermal_frame_handler,
     };
+    const httpd_uri_t control_manual_uri = {
+        .uri = "/control/manual",
+        .method = HTTP_GET,
+        .handler = control_manual_handler,
+    };
+    const httpd_uri_t control_stop_uri = {
+        .uri = "/control/stop",
+        .method = HTTP_GET,
+        .handler = control_stop_handler,
+    };
+    const httpd_uri_t control_status_uri = {
+        .uri = "/control/status",
+        .method = HTTP_GET,
+        .handler = control_status_handler,
+    };
 
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &root_uri), TAG, "Failed to register /");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &thermal_uri), TAG, "Failed to register /thermal");
@@ -389,6 +586,9 @@ esp_err_t http_camera_server_start(void)
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &capture_jpg_uri), TAG, "Failed to register jpg capture");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(stream_server, &stream_mjpg_uri), TAG, "Failed to register MJPEG stream");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &thermal_frame_uri), TAG, "Failed to register /thermal/frame");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &control_manual_uri), TAG, "Failed to register /control/manual");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &control_stop_uri), TAG, "Failed to register /control/stop");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &control_status_uri), TAG, "Failed to register /control/status");
 
     ESP_LOGD(TAG, "HTTP camera server started on port %d, stream port %d",
              config.server_port,
