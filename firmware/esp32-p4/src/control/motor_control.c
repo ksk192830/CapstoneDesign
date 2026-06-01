@@ -17,36 +17,45 @@
 #define WHEEL_RADIUS_MM 30.0f
 #define TRACK_WIDTH_MM 255.0f
 #define WHEEL_BASE_MM 200.0f
+#define MOTOR_SPEED_SCALE 1.00f
 
-#define FL_PWM_PIN 23
-#define FL_IN1_PIN 20
-#define FL_IN2_PIN 6
+#define MOTOR_FL_SCALE 0.9f
+#define MOTOR_FR_SCALE 0.94f
+#define MOTOR_BL_SCALE 0.91f
+#define MOTOR_BR_SCALE 1.00f
 
-#define BL_PWM_PIN 26
-#define BL_IN3_PIN 24
-#define BL_IN4_PIN 33
+#define FL_PWM_PIN 23   //ENA
+#define FL_IN1_PIN 20   //IN1
+#define FL_IN2_PIN 6    //IN2
 
-#define FR_PWM_PIN 25
-#define FR_IN1_PIN 46
-#define FR_IN2_PIN 27
+#define BL_PWM_PIN 26   //ENB
+#define BL_IN3_PIN 24   //IN3
+#define BL_IN4_PIN 33   //IN4
 
-#define BR_PWM_PIN 7
-#define BR_IN3_PIN 4
-#define BR_IN4_PIN 5
+#define FR_PWM_PIN 36   //ENB
+#define FR_IN1_PIN 4    //IN3
+#define FR_IN2_PIN 5    //IN4
+
+#define BR_PWM_PIN 25   //ENA
+#define BR_IN3_PIN 46   //IN1
+#define BR_IN4_PIN 27   //IN2
 
 #define ENCODER_PPR 330
 
 #define ENC_FL_A_PIN 3
 #define ENC_FL_B_PIN 2
+
 #define ENC_FR_A_PIN 32
 #define ENC_FR_B_PIN 1
+
 #define ENC_BL_A_PIN 53
 #define ENC_BL_B_PIN 47
+
 #define ENC_BR_A_PIN 48
 #define ENC_BR_B_PIN 45
 
 enum {
-    MOTOR_PWM_FREQ_HZ = 20000,
+    MOTOR_PWM_FREQ_HZ = 1000,
     MOTOR_PWM_RES = LEDC_TIMER_10_BIT,
     MOTOR_PWM_MAX_DUTY = (1 << 10) - 1,
     MOTOR_DEFAULT_TTL_MS = 300,
@@ -115,6 +124,13 @@ static const motor_hw_t s_motors[WHEEL_COUNT] = {
     },
 };
 
+static const float s_wheel_scales[WHEEL_COUNT] = {
+    [WHEEL_FL] = MOTOR_FL_SCALE,
+    [WHEEL_FR] = MOTOR_FR_SCALE,
+    [WHEEL_BL] = MOTOR_BL_SCALE,
+    [WHEEL_BR] = MOTOR_BR_SCALE,
+};
+
 static encoder_hw_t s_encoders[WHEEL_COUNT] = {
     [WHEEL_FL] = {.a_pin = ENC_FL_A_PIN, .b_pin = ENC_FL_B_PIN},
     [WHEEL_FR] = {.a_pin = ENC_FR_A_PIN, .b_pin = ENC_FR_B_PIN},
@@ -127,6 +143,7 @@ static float s_last_x;
 static float s_last_y;
 static float s_last_r;
 static float s_last_wheels[WHEEL_COUNT];
+static uint32_t s_last_duties[WHEEL_COUNT];
 static int64_t s_last_command_us;
 static uint32_t s_last_ttl_ms;
 static bool s_active;
@@ -249,7 +266,7 @@ static void motor_apply_wheel(wheel_id_t wheel, float speed)
 {
     const motor_hw_t *m = &s_motors[wheel];
     const float mag = fabsf(clampf(speed, -1.0f, 1.0f));
-    const uint32_t duty = (uint32_t)lroundf(mag * MOTOR_PWM_MAX_DUTY);
+    const uint32_t duty = (uint32_t)lroundf(mag * MOTOR_SPEED_SCALE * MOTOR_PWM_MAX_DUTY);
 
     if (duty == 0) {
         gpio_set_level(m->in_a_pin, 0);
@@ -266,6 +283,12 @@ static void motor_apply_wheel(wheel_id_t wheel, float speed)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, m->pwm_channel);
 }
 
+static uint32_t wheel_speed_to_duty(float speed)
+{
+    const float mag = fabsf(clampf(speed, -1.0f, 1.0f));
+    return (uint32_t)lroundf(mag * MOTOR_SPEED_SCALE * MOTOR_PWM_MAX_DUTY);
+}
+
 static void motor_apply_all(const float wheels[WHEEL_COUNT])
 {
     for (int i = 0; i < WHEEL_COUNT; ++i) {
@@ -273,12 +296,19 @@ static void motor_apply_all(const float wheels[WHEEL_COUNT])
     }
 }
 
+static void apply_wheel_scales(float wheels[WHEEL_COUNT])
+{
+    for (int i = 0; i < WHEEL_COUNT; ++i) {
+        wheels[i] = clampf(wheels[i] * s_wheel_scales[i], -1.0f, 1.0f);
+    }
+}
+
 static void compute_wheels(float x, float y, float r, float wheels[WHEEL_COUNT])
 {
-    wheels[WHEEL_FL] = y + x - r;
-    wheels[WHEEL_FR] = y - x + r;
-    wheels[WHEEL_BL] = y - x - r;
-    wheels[WHEEL_BR] = y + x + r;
+    wheels[WHEEL_FL] = y - x - r;
+    wheels[WHEEL_FR] = y + x + r;
+    wheels[WHEEL_BL] = y + x - r;
+    wheels[WHEEL_BR] = y - x + r;
 
     float max_abs = 1.0f;
     for (int i = 0; i < WHEEL_COUNT; ++i) {
@@ -290,6 +320,8 @@ static void compute_wheels(float x, float y, float r, float wheels[WHEEL_COUNT])
     for (int i = 0; i < WHEEL_COUNT; ++i) {
         wheels[i] /= max_abs;
     }
+
+    apply_wheel_scales(wheels);
 }
 
 static void safety_task(void *arg)
@@ -310,6 +342,7 @@ static void safety_task(void *arg)
                 s_last_r = 0.0f;
                 for (int i = 0; i < WHEEL_COUNT; ++i) {
                     s_last_wheels[i] = 0.0f;
+                    s_last_duties[i] = 0;
                 }
             }
         }
@@ -355,6 +388,7 @@ esp_err_t motor_control_set_manual(const motor_control_manual_cmd_t *cmd)
     const float x = clampf(cmd->x, -1.0f, 1.0f);
     const float y = clampf(cmd->y, -1.0f, 1.0f);
     const float r = clampf(cmd->r, -1.0f, 1.0f);
+
     uint32_t ttl_ms = cmd->ttl_ms == 0 ? MOTOR_DEFAULT_TTL_MS : cmd->ttl_ms;
     if (ttl_ms > MOTOR_MAX_TTL_MS) {
         ttl_ms = MOTOR_MAX_TTL_MS;
@@ -373,6 +407,7 @@ esp_err_t motor_control_set_manual(const motor_control_manual_cmd_t *cmd)
     s_active = fabsf(x) > 0.001f || fabsf(y) > 0.001f || fabsf(r) > 0.001f;
     for (int i = 0; i < WHEEL_COUNT; ++i) {
         s_last_wheels[i] = wheels[i];
+        s_last_duties[i] = wheel_speed_to_duty(wheels[i]);
     }
     portEXIT_CRITICAL(&s_lock);
 
@@ -393,6 +428,7 @@ void motor_control_stop(void)
     s_active = false;
     for (int i = 0; i < WHEEL_COUNT; ++i) {
         s_last_wheels[i] = 0.0f;
+        s_last_duties[i] = 0;
     }
     portEXIT_CRITICAL(&s_lock);
 }
@@ -411,6 +447,10 @@ void motor_control_get_status(motor_control_status_t *status)
     status->wheel_fr = s_last_wheels[WHEEL_FR];
     status->wheel_bl = s_last_wheels[WHEEL_BL];
     status->wheel_br = s_last_wheels[WHEEL_BR];
+    status->duty_fl = s_last_duties[WHEEL_FL];
+    status->duty_fr = s_last_duties[WHEEL_FR];
+    status->duty_bl = s_last_duties[WHEEL_BL];
+    status->duty_br = s_last_duties[WHEEL_BR];
     status->enc_fl = s_encoders[WHEEL_FL].count;
     status->enc_fr = s_encoders[WHEEL_FR].count;
     status->enc_bl = s_encoders[WHEEL_BL].count;

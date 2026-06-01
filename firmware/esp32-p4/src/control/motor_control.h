@@ -20,6 +20,10 @@ typedef struct {
     float wheel_fr;
     float wheel_bl;
     float wheel_br;
+    uint32_t duty_fl;
+    uint32_t duty_fr;
+    uint32_t duty_bl;
+    uint32_t duty_br;
     int64_t enc_fl;
     int64_t enc_fr;
     int64_t enc_bl;

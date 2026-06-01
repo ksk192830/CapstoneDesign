@@ -78,7 +78,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         ".control { margin-top: 18px; padding-top: 16px; border-top: 1px solid #ddd; }"
         ".control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: stretch; }"
         ".keys { display: grid; grid-template-columns: repeat(3, 54px); gap: 8px; justify-content: center; align-content: center; }"
-        ".key { height: 42px; border: 1px solid #bbb; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; background: #f7f7f7; color: #333; }"
+        ".key { height: 42px; border: 1px solid #bbb; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; background: #f7f7f7; color: #333; touch-action: none; user-select: none; -webkit-user-select: none; }"
         ".key.active { background: #007bff; border-color: #0056b3; color: white; }"
         ".readout { font-family: monospace; font-size: 14px; line-height: 1.5; background: #111; color: #d7ffd7; padding: 12px; border-radius: 6px; min-height: 116px; white-space: pre-wrap; }"
         ".hint { color: #555; text-align: center; margin: 8px 0 0; }"
@@ -194,7 +194,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "   if(!res.ok) throw new Error('HTTP '+res.status);"
         "  }"
         "  const st=await fetch('/control/status',{cache:'no-store'}).then(r=>r.json());"
-        "  driveInfo.textContent='active: '+st.active+'\\nvector x/y/r: '+st.x.toFixed(2)+' / '+st.y.toFixed(2)+' / '+st.r.toFixed(2)+'\\nwheels FL/FR/BL/BR: '+st.wheels.fl.toFixed(2)+' / '+st.wheels.fr.toFixed(2)+' / '+st.wheels.bl.toFixed(2)+' / '+st.wheels.br.toFixed(2)+'\\nenc FL/FR/BL/BR: '+st.encoders.fl+' / '+st.encoders.fr+' / '+st.encoders.bl+' / '+st.encoders.br;"
+        "  driveInfo.textContent='active: '+st.active+'\\nvector x/y/r: '+st.x.toFixed(2)+' / '+st.y.toFixed(2)+' / '+st.r.toFixed(2)+'\\nwheels FL/FR/BL/BR: '+st.wheels.fl.toFixed(2)+' / '+st.wheels.fr.toFixed(2)+' / '+st.wheels.bl.toFixed(2)+' / '+st.wheels.br.toFixed(2)+'\\nduty FL/FR/BL/BR: '+st.duties.fl+' / '+st.duties.fr+' / '+st.duties.bl+' / '+st.duties.br+'\\nenc FL/FR/BL/BR: '+st.encoders.fl+' / '+st.encoders.fr+' / '+st.encoders.bl+' / '+st.encoders.br;"
         " }catch(e){"
         "  driveInfo.textContent='Drive error: '+e.message;"
         " }"
@@ -209,6 +209,14 @@ static esp_err_t root_handler(httpd_req_t *req)
         "document.addEventListener('keyup',e=>{"
         " const k=e.key.toLowerCase();"
         " if(['q','w','e','a','s','d'].includes(k)){ e.preventDefault(); pressed.delete(k); updateKeys(); sendDrive(); }"
+        "});"
+        "document.querySelectorAll('.key').forEach(el=>{"
+        " const k=el.id.replace('key-','');"
+        " const press=e=>{ e.preventDefault(); el.setPointerCapture?.(e.pointerId); pressed.add(k); updateKeys(); ensureDriveTimer(); sendDrive(); };"
+        " const release=e=>{ e.preventDefault(); pressed.delete(k); updateKeys(); sendDrive(); };"
+        " el.addEventListener('pointerdown',press);"
+        " el.addEventListener('pointerup',release);"
+        " el.addEventListener('pointercancel',release);"
         "});"
         "window.addEventListener('blur',()=>{ pressed.clear(); updateKeys(); sendDrive(); });"
         "setInterval(sendDrive,500);"
@@ -477,12 +485,13 @@ static esp_err_t control_status_handler(httpd_req_t *req)
     motor_control_status_t st = {0};
     motor_control_get_status(&st);
 
-    char body[384];
+    char body[512];
     const int len = snprintf(body,
                              sizeof(body),
                              "{\"active\":%s,\"age_ms\":%lu,"
                              "\"x\":%.3f,\"y\":%.3f,\"r\":%.3f,"
                              "\"wheels\":{\"fl\":%.3f,\"fr\":%.3f,\"bl\":%.3f,\"br\":%.3f},"
+                             "\"duties\":{\"fl\":%lu,\"fr\":%lu,\"bl\":%lu,\"br\":%lu},"
                              "\"encoders\":{\"fl\":%lld,\"fr\":%lld,\"bl\":%lld,\"br\":%lld}}",
                              st.active ? "true" : "false",
                              (unsigned long)st.age_ms,
@@ -493,6 +502,10 @@ static esp_err_t control_status_handler(httpd_req_t *req)
                              (double)st.wheel_fr,
                              (double)st.wheel_bl,
                              (double)st.wheel_br,
+                             (unsigned long)st.duty_fl,
+                             (unsigned long)st.duty_fr,
+                             (unsigned long)st.duty_bl,
+                             (unsigned long)st.duty_br,
                              (long long)st.enc_fl,
                              (long long)st.enc_fr,
                              (long long)st.enc_bl,
