@@ -1,8 +1,10 @@
 #include "motor_control.h"
 
+#include <inttypes.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -37,7 +39,7 @@
 #define FR_IN2_PIN 5    //IN4
 
 #define BR_PWM_PIN 25   //ENA
-#define BR_IN3_PIN 46   //IN1
+#define BR_IN3_PIN 0    //IN1
 #define BR_IN4_PIN 27   //IN2
 
 #define ENCODER_PPR 330
@@ -89,6 +91,11 @@ typedef struct {
 
 static const char *TAG = "motor_control";
 
+typedef struct {
+    wheel_id_t wheel;
+    const char *name;
+} wheel_test_step_t;
+
 static const motor_hw_t s_motors[WHEEL_COUNT] = {
     [WHEEL_FL] = {
         .pwm_pin = FL_PWM_PIN,
@@ -136,6 +143,13 @@ static encoder_hw_t s_encoders[WHEEL_COUNT] = {
     [WHEEL_FR] = {.a_pin = ENC_FR_A_PIN, .b_pin = ENC_FR_B_PIN},
     [WHEEL_BL] = {.a_pin = ENC_BL_A_PIN, .b_pin = ENC_BL_B_PIN},
     [WHEEL_BR] = {.a_pin = ENC_BR_A_PIN, .b_pin = ENC_BR_B_PIN},
+};
+
+static const wheel_test_step_t s_wheel_test_order[] = {
+    {.wheel = WHEEL_FL, .name = "LF"},
+    {.wheel = WHEEL_BL, .name = "LR"},
+    {.wheel = WHEEL_FR, .name = "RF"},
+    {.wheel = WHEEL_BR, .name = "RR"},
 };
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -305,10 +319,10 @@ static void apply_wheel_scales(float wheels[WHEEL_COUNT])
 
 static void compute_wheels(float x, float y, float r, float wheels[WHEEL_COUNT])
 {
-    wheels[WHEEL_FL] = y - x - r;
-    wheels[WHEEL_FR] = y + x + r;
-    wheels[WHEEL_BL] = y + x - r;
-    wheels[WHEEL_BR] = y - x + r;
+    wheels[WHEEL_FL] = y + x - r;
+    wheels[WHEEL_FR] = y - x + r;
+    wheels[WHEEL_BL] = y - x - r;
+    wheels[WHEEL_BR] = y + x + r;
 
     float max_abs = 1.0f;
     for (int i = 0; i < WHEEL_COUNT; ++i) {
@@ -412,6 +426,53 @@ esp_err_t motor_control_set_manual(const motor_control_manual_cmd_t *cmd)
     portEXIT_CRITICAL(&s_lock);
 
     return ESP_OK;
+}
+
+void motor_control_run_wheel_self_test(float speed, uint32_t run_ms, uint32_t pause_ms)
+{
+    const float test_speed = clampf(fabsf(speed), 0.0f, 1.0f);
+    if (test_speed <= 0.001f || run_ms == 0) {
+        printf("[MOTOR_TEST] skipped: speed=%.3f run_ms=%" PRIu32 "\n", test_speed, run_ms);
+        return;
+    }
+
+    printf("[MOTOR_TEST] start: order=LF LR RF RR speed=%.2f run=%" PRIu32 "ms pause=%" PRIu32 "ms\n",
+           test_speed,
+           run_ms,
+           pause_ms);
+
+    motor_control_stop();
+    vTaskDelay(pdMS_TO_TICKS(pause_ms));
+
+    for (size_t i = 0; i < sizeof(s_wheel_test_order) / sizeof(s_wheel_test_order[0]); ++i) {
+        const wheel_id_t wheel = s_wheel_test_order[i].wheel;
+        const char *name = s_wheel_test_order[i].name;
+
+        const int64_t forward_start = s_encoders[wheel].count;
+        float wheels[WHEEL_COUNT] = {0};
+        wheels[wheel] = test_speed;
+        printf("[MOTOR_TEST] %s forward\n", name);
+        motor_apply_all(wheels);
+        vTaskDelay(pdMS_TO_TICKS(run_ms));
+        motor_control_stop();
+        printf("[MOTOR_TEST] %s forward encoder_delta=%" PRId64 "\n",
+               name,
+               s_encoders[wheel].count - forward_start);
+        vTaskDelay(pdMS_TO_TICKS(pause_ms));
+
+        const int64_t reverse_start = s_encoders[wheel].count;
+        wheels[wheel] = -test_speed;
+        printf("[MOTOR_TEST] %s reverse\n", name);
+        motor_apply_all(wheels);
+        vTaskDelay(pdMS_TO_TICKS(run_ms));
+        motor_control_stop();
+        printf("[MOTOR_TEST] %s reverse encoder_delta=%" PRId64 "\n",
+               name,
+               s_encoders[wheel].count - reverse_start);
+        vTaskDelay(pdMS_TO_TICKS(pause_ms));
+    }
+
+    printf("[MOTOR_TEST] complete\n");
 }
 
 void motor_control_stop(void)

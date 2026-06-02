@@ -13,6 +13,17 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#ifndef MOTOR_SELF_TEST_SPEED
+#define MOTOR_SELF_TEST_SPEED 0.35f
+#endif
+
+#ifndef MOTOR_SELF_TEST_RUN_MS
+#define MOTOR_SELF_TEST_RUN_MS 1200
+#endif
+
+#ifndef MOTOR_SELF_TEST_PAUSE_MS
+#define MOTOR_SELF_TEST_PAUSE_MS 700
+#endif
 
 static void stay_alive(void)
 {
@@ -46,6 +57,24 @@ void app_main(void)
 {
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_log_level_set("*", ESP_LOG_WARN);
+
+#ifdef MOTOR_TEST_ONLY
+    printf("\n[BOOT] ESP32-P4 motor-test-only firmware starting\n");
+    printf("[MOTOR] init starts now; Wi-Fi/camera/thermal/HTTP are disabled\n");
+
+    esp_err_t ret = motor_control_init();
+    if (ret != ESP_OK) {
+        printf("[ERROR] Motor control init failed: %s\n", esp_err_to_name(ret));
+        stay_alive();
+    }
+
+    motor_control_run_wheel_self_test(MOTOR_SELF_TEST_SPEED,
+                                      MOTOR_SELF_TEST_RUN_MS,
+                                      MOTOR_SELF_TEST_PAUSE_MS);
+    printf("[MOTOR] test finished; motors stopped\n");
+    stay_alive();
+#else
+
     printf("\n[BOOT] ESP32-P4 camera firmware starting\n");
 
     reset_c6_before_hosted_start();
@@ -92,4 +121,5 @@ void app_main(void)
     }
 
     stay_alive();
+#endif
 }

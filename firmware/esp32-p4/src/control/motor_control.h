@@ -34,5 +34,6 @@ typedef struct {
 
 esp_err_t motor_control_init(void);
 esp_err_t motor_control_set_manual(const motor_control_manual_cmd_t *cmd);
+void motor_control_run_wheel_self_test(float speed, uint32_t run_ms, uint32_t pause_ms);
 void motor_control_stop(void);
 void motor_control_get_status(motor_control_status_t *status);
