@@ -1,0 +1,7 @@
+dependencies:
+  esp_video: {}
+  espressif/esp_tinyusb:
+    rules:
+    - if: target in [esp32p4, esp32s3]
+    version: ~2.1.*
+  idf: '>=5.4'
