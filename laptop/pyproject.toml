@@ -9,7 +9,7 @@ description = "Laptop-side vision and control client for ESP32-P4 machine projec
 requires-python = ">=3.10"
 dependencies = [
   "opencv-python",
-  "websockets",
+  "flask",
   "torch",
   "transformers",
   "pillow",
