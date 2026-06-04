@@ -1,9 +1,16 @@
 from pathlib import Path
+import sys
 
 Import("env")
 
 PROJECT_DIR = Path(env.subst("$PROJECT_DIR"))
 BUILD_DIR = Path(env.subst("$BUILD_DIR"))
+WINDOWS_SERIAL_PORT = "COM4"
+
+
+if sys.platform.startswith("win"):
+    env.Replace(UPLOAD_PORT=WINDOWS_SERIAL_PORT)
+    env.Replace(MONITOR_PORT=WINDOWS_SERIAL_PORT)
 
 
 def prepend_include(path: Path) -> None:
