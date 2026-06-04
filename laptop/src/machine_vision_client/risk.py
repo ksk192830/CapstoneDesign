@@ -12,7 +12,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from materials import Material
+from machine_vision_client.materials import Material
 
 
 @dataclass

@@ -20,7 +20,10 @@ to quit.
 """
 
 import os
+import queue
+import threading
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 # `time` is also used inside HttpJpegSource below; keep the import here.
@@ -30,12 +33,22 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
-from materials import Material, load_materials
-from risk import RiskState
+from machine_vision_client.config import (
+    LOCAL_DEV,
+    RGB_H,
+    RGB_SOURCE,
+    RGB_W,
+    THERMAL_BAUD,
+    THERMAL_HTTP_URL,
+    THERMAL_PORT,
+)
+from machine_vision_client.materials import Material, load_materials
+from machine_vision_client.risk import RiskState
 import numpy as np
 
-from thermal import (
+from machine_vision_client.thermal import (
     Esp32ThermalSource,
+    Hotspot,
     HttpThermalSource,
     MockThermalSource,
     ThermalFrame,
@@ -53,7 +66,19 @@ from thermal import (
 # Counter-clockwise 90° rotations to apply to each incoming thermal frame.
 # Use this when the MLX90640 is physically mounted rotated relative to the
 # RGB camera. 0 = no rotation, 1 = CCW 90°, 2 = 180°, 3 = CW 90°.
-THERMAL_ROTATE_CCW: int = 0  # 0/1/2/3 for 0/90/180/270 deg CCW rotation
+THERMAL_ROTATE_CCW: int = 1
+# Horizontal mirror, applied after the rotation. The MLX90640 reads rows
+# back-to-front relative to the RGB camera's view, so set this True to
+# match left/right between the two windows.
+THERMAL_MIRROR_H: bool = True
+
+# Crop fractions applied after rotate + mirror. Keep the top
+# THERMAL_CROP_V_FRAC of rows and the left THERMAL_CROP_H_FRAC of columns
+# of the displayed thermal frame. Used when the MLX90640's FOV is wider
+# than the RGB camera and we want the algorithm + display to look at the
+# same region. Set both to 1.0 to disable.
+THERMAL_CROP_H_FRAC: float = 0.6
+THERMAL_CROP_V_FRAC: float = 0.5
 
 # Effective thermal dims + FOV after rotation. An odd number of 90°
 # rotations swaps width <-> height and H <-> V FOV.
@@ -68,6 +93,12 @@ else:
     EFF_THERMAL_FOV_H_DEG = THERMAL_FOV_H_DEG
     EFF_THERMAL_FOV_V_DEG = THERMAL_FOV_V_DEG
 
+# Apply crop to dims + FOV so projection stays in sync with the cropped frame.
+EFF_THERMAL_W = max(1, int(round(EFF_THERMAL_W * THERMAL_CROP_H_FRAC)))
+EFF_THERMAL_H = max(1, int(round(EFF_THERMAL_H * THERMAL_CROP_V_FRAC)))
+EFF_THERMAL_FOV_H_DEG *= THERMAL_CROP_H_FRAC
+EFF_THERMAL_FOV_V_DEG *= THERMAL_CROP_V_FRAC
+
 
 def _proj_kwargs() -> dict:
     return dict(
@@ -78,43 +109,36 @@ def _proj_kwargs() -> dict:
 
 
 def rotate_thermal_frame(tframe: ThermalFrame) -> ThermalFrame:
-    if THERMAL_ROTATE_CCW % 4 == 0:
+    temps = tframe.temps_c
+    if THERMAL_ROTATE_CCW % 4 != 0:
+        temps = np.rot90(temps, k=THERMAL_ROTATE_CCW)
+    if THERMAL_MIRROR_H:
+        temps = np.fliplr(temps)
+    h, w = temps.shape
+    new_h = max(1, int(round(h * THERMAL_CROP_V_FRAC)))
+    new_w = max(1, int(round(w * THERMAL_CROP_H_FRAC)))
+    if (new_h, new_w) != (h, w):
+        temps = np.ascontiguousarray(temps[:new_h, :new_w])
+    if temps is tframe.temps_c:
         return tframe
-    return ThermalFrame(
-        temps_c=np.rot90(tframe.temps_c, k=THERMAL_ROTATE_CCW),
-        timestamp=tframe.timestamp,
-    )
+    return ThermalFrame(temps_c=temps, timestamp=tframe.timestamp)
 
 
 MODEL_NAME = "prithivMLmods/Minc-Materials-23"
 
-# RGB source: int = local webcam index, str = URL (HTTP MJPEG, RTSP, or
-# a video file path). The reference firmware in ksk192830/CapstoneDesign
-# (firmware/esp32-p4) exposes the OV5647 as `http://<esp32-ip>/stream.mjpg`
-# (800x640 MJPEG). Note: docs/protocol.md says `/stream/visible.mjpeg`, but
-# the actual http_camera_server.c registers `/stream.mjpg` — use the code.
-# Examples:
-#   RGB_SOURCE = 0
-#   RGB_SOURCE = "http://<esp32-ip>/stream.mjpg"
-RGB_SOURCE: int | str = 0  # 0 = local webcam; or "http://<esp32-ip>/capture/visible.jpg"
-RGB_W = 640
-RGB_H = 480
+# RGB / thermal sources come from machine_vision_client.config (override ESP32_HOST
+# or set HEAT_LOCAL=1). Examples:
+#   export ESP32_HOST=172.30.1.50
+#   export HEAT_LOCAL=1          # webcam + mock thermal
+#   export THERMAL_PORT=COM3     # Windows USB serial
 PREDICT_EVERY_N_FRAMES = 15
 CROP_SIZE = 224
 HOTSPOT_THRESHOLD_C = 45.0
 
-# Thermal transport. Three options, picked in this order of preference:
-#   THERMAL_HTTP_URL: str  -> HttpThermalSource against the unified
-#       ESP32-P4 firmware (firmware/esp32-p4-unified). Use this when the
-#       P4 is on Wi-Fi and exposing /thermal/frame.
-#   THERMAL_PORT:     str  -> USB-serial source (legacy thermal-only
-#       ESP32 running esp32_mlx90640.ino).
-#   both None              -> MockThermalSource (Gaussian hot blob).
-THERMAL_HTTP_URL: str | None = None  # e.g. "http://<esp32-ip>/thermal/frame"
-THERMAL_PORT: str | None = None  # e.g. "/dev/cu.usbmodemXXXX" for USB-serial MLX90640
-THERMAL_BAUD = 921600
+# Thermal transport priority: THERMAL_HTTP_URL -> THERMAL_PORT -> mock.
+# See config.py for defaults and platform-specific serial port names.
 
-# Patch-grid material scan: split the RGB frame into a grid of `density`
+# Patch-grid material scan:
 # columns; rows derived from the frame aspect ratio. Changeable live with
 # +/- in the OpenCV window (capped at MIN/MAX_DENSITY).
 GRID_DENSITY_DEFAULT = 4
@@ -534,12 +558,185 @@ RGB_WIN = f"Fire Risk - RGB [pid {os.getpid()}]"
 THERMAL_WIN = f"Fire Risk - Thermal [pid {os.getpid()}]"
 
 
+@dataclass
+class _InferJob:
+    generation: int
+    frame: np.ndarray
+    temps_c: np.ndarray
+    grid_cols: int
+    grid_rows: int
+    min_conf: float
+    fw: int
+    fh: int
+
+
+@dataclass
+class _InferResult:
+    generation: int
+    patches: list
+    regions: list
+    hotspot: Optional[Hotspot]
+    hotspot_rgb_xy: Optional[tuple[int, int]]
+    label: str
+    conf: float
+    mat: Optional[Material]
+
+
+class InferenceWorker:
+    """Runs ViT grid + hotspot classification off the display thread.
+
+    HttpThermalSource already polls in a background thread; this keeps
+    cap.read() / imshow smooth while CPU inference runs (~1–2 s per batch).
+    Only the latest pending job is kept so work does not queue up.
+    """
+
+    def __init__(
+        self,
+        processor,
+        model,
+        device: str,
+        materials: dict[str, Material],
+        risk: RiskState,
+    ):
+        self._processor = processor
+        self._model = model
+        self._device = device
+        self._materials = materials
+        self._risk = risk
+        self._risk_lock = threading.Lock()
+        self._generation = 0
+        self._job_q: queue.Queue[_InferJob] = queue.Queue(maxsize=1)
+        self._result_lock = threading.Lock()
+        self._latest: _InferResult | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def bump_generation(self) -> int:
+        with self._result_lock:
+            self._generation += 1
+            self._latest = None
+        self._drain_jobs()
+        return self._generation
+
+    def submit(
+        self,
+        frame,
+        tframe: ThermalFrame,
+        grid_cols: int,
+        grid_rows: int,
+        min_conf: float,
+    ) -> None:
+        fh, fw = frame.shape[:2]
+        job = _InferJob(
+            generation=self._generation,
+            frame=frame.copy(),
+            temps_c=tframe.temps_c.copy(),
+            grid_cols=grid_cols,
+            grid_rows=grid_rows,
+            min_conf=min_conf,
+            fw=fw,
+            fh=fh,
+        )
+        self._drain_jobs()
+        try:
+            self._job_q.put_nowait(job)
+        except queue.Full:
+            pass
+
+    def try_take_result(self) -> _InferResult | None:
+        with self._result_lock:
+            if self._latest is None or self._latest.generation != self._generation:
+                return None
+            out = self._latest
+            self._latest = None
+            return out
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5.0)
+
+    def _drain_jobs(self) -> None:
+        try:
+            while True:
+                self._job_q.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self._job_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if job.generation != self._generation:
+                continue
+            result = self._run(job)
+            if result.generation != self._generation:
+                continue
+            with self._result_lock:
+                self._latest = result
+
+    def _run(self, job: _InferJob) -> _InferResult:
+        tframe = ThermalFrame(temps_c=job.temps_c, timestamp=time.time())
+        patches = classify_patches(
+            job.frame,
+            self._processor,
+            self._model,
+            self._device,
+            job.grid_cols,
+            job.grid_rows,
+            tframe=tframe,
+        )
+        regions = aggregate_patches(
+            patches, job.grid_cols, job.grid_rows, job.min_conf
+        )
+        hotspot = detect_hotspot(tframe, threshold_c=HOTSPOT_THRESHOLD_C)
+        hotspot_rgb_xy: tuple[int, int] | None = None
+        label, conf = "", 0.0
+        mat: Optional[Material] = None
+
+        if hotspot is not None:
+            rx, ry, in_view = project_thermal_to_rgb(
+                hotspot.x, hotspot.y, job.fw, job.fh, **_proj_kwargs()
+            )
+            if in_view:
+                hotspot_rgb_xy = (rx, ry)
+                crop, _ = crop_around(job.frame, rx, ry, CROP_SIZE)
+                label, conf = classify_top1(
+                    crop, self._processor, self._model, self._device
+                )
+                mat = self._materials.get(label)
+            else:
+                label, conf = "(hotspot out of RGB view)", 0.0
+            with self._risk_lock:
+                self._risk.update(hotspot.temp_c, mat)
+        else:
+            with self._risk_lock:
+                self._risk.update(None, None)
+
+        return _InferResult(
+            generation=job.generation,
+            patches=patches,
+            regions=regions,
+            hotspot=hotspot,
+            hotspot_rgb_xy=hotspot_rgb_xy,
+            label=label,
+            conf=conf,
+            mat=mat,
+        )
+
+
 def main():
+    if LOCAL_DEV:
+        print("[config] LOCAL_DEV: webcam index 0 + mock thermal")
     materials = load_materials()
     print(f"Loaded {len(materials)} materials from xlsx.")
     print(f"OpenCV windows: '{RGB_WIN}' and '{THERMAL_WIN}'")
 
     processor, model, device = load_model()
+    risk = RiskState()
+    infer_worker = InferenceWorker(processor, model, device, materials, risk)
 
     print(f"Opening RGB source: {RGB_SOURCE!r}")
     cap = open_rgb_capture(RGB_SOURCE)
@@ -558,7 +755,6 @@ def main():
             thermal = MockThermalSource()
     else:
         thermal = MockThermalSource()
-    risk = RiskState()
 
     frame_count = 0
     label, conf = "", 0.0
@@ -577,105 +773,92 @@ def main():
     fps = 0.0
 
     print("Press 'q' to quit. '+' / '-' adjusts grid density. ',' / '.' adjusts min confidence.")
+    print("[infer] material classification runs on a background thread (display stays live).")
     consecutive_failures = 0
     is_network_source = isinstance(RGB_SOURCE, str)
-    while True:
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            consecutive_failures += 1
-            if is_network_source and consecutive_failures < 30:
-                cv2.imshow("Heat Algorithm",
-                           make_error_frame(RGB_W, RGB_H, "Waiting for stream..."))
-                if cv2.waitKey(33) & 0xFF == ord("q"):
-                    break
-                if consecutive_failures % 10 == 0:
-                    print(f"[rgb] stream stalled; reopening {RGB_SOURCE!r}")
-                    cap.release()
-                    try:
-                        cap = open_rgb_capture(RGB_SOURCE)
-                    except RuntimeError as e:
-                        print(f"[rgb] reopen failed: {e}")
-                continue
-            print("Failed to receive frame.")
-            break
-        consecutive_failures = 0
-        frame_count += 1
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                consecutive_failures += 1
+                if is_network_source and consecutive_failures < 30:
+                    cv2.imshow("Heat Algorithm",
+                               make_error_frame(RGB_W, RGB_H, "Waiting for stream..."))
+                    if cv2.waitKey(33) & 0xFF == ord("q"):
+                        break
+                    if consecutive_failures % 10 == 0:
+                        print(f"[rgb] stream stalled; reopening {RGB_SOURCE!r}")
+                        cap.release()
+                        try:
+                            cap = open_rgb_capture(RGB_SOURCE)
+                        except RuntimeError as e:
+                            print(f"[rgb] reopen failed: {e}")
+                    continue
+                print("Failed to receive frame.")
+                break
+            consecutive_failures = 0
+            frame_count += 1
 
-        now = time.time()
-        dt = now - prev_time
-        if dt > 0:
-            fps = 1.0 / dt
-        prev_time = now
+            now = time.time()
+            dt = now - prev_time
+            if dt > 0:
+                fps = 1.0 / dt
+            prev_time = now
 
-        tframe = rotate_thermal_frame(thermal.read())
+            tframe = rotate_thermal_frame(thermal.read())
+            live_hotspot = detect_hotspot(tframe, threshold_c=HOTSPOT_THRESHOLD_C)
 
-        fh, fw = frame.shape[:2]
-        # Keep the grid aspect ratio synced with the actual incoming frame
-        # — firmware emits 800x640, not the RGB_W/RGB_H defaults.
-        if (fw, fh) != last_grid_dims:
-            grid_cols, grid_rows = grid_for_density(density, fw, fh)
-            last_grid_dims = (fw, fh)
+            fh, fw = frame.shape[:2]
+            # Keep the grid aspect ratio synced with the actual incoming frame
+            # — firmware emits 800x640, not the RGB_W/RGB_H defaults.
+            if (fw, fh) != last_grid_dims:
+                grid_cols, grid_rows = grid_for_density(density, fw, fh)
+                last_grid_dims = (fw, fh)
 
-        if frame_count % PREDICT_EVERY_N_FRAMES == 0:
-            patches = classify_patches(
-                frame, processor, model, device, grid_cols, grid_rows,
-                tframe=tframe,
-            )
-            regions = aggregate_patches(
-                patches, grid_cols, grid_rows, min_conf
-            )
+            if frame_count % PREDICT_EVERY_N_FRAMES == 0:
+                infer_worker.submit(frame, tframe, grid_cols, grid_rows, min_conf)
 
-            hotspot = detect_hotspot(tframe, threshold_c=HOTSPOT_THRESHOLD_C)
+            result = infer_worker.try_take_result()
+            if result is not None:
+                patches = result.patches
+                regions = result.regions
+                hotspot = result.hotspot
+                hotspot_rgb_xy = result.hotspot_rgb_xy
+                label, conf, mat = result.label, result.conf, result.mat
+                with infer_worker._risk_lock:
+                    print(format_status(fps, hotspot, label, conf, mat, risk,
+                                        grid_cols, grid_rows))
 
-            if hotspot is not None:
-                rx, ry, in_view = project_thermal_to_rgb(
-                    hotspot.x, hotspot.y, fw, fh, **_proj_kwargs()
-                )
-                if in_view:
-                    hotspot_rgb_xy = (rx, ry)
-                    crop, _ = crop_around(frame, rx, ry, CROP_SIZE)
-                    label, conf = classify_top1(crop, processor, model, device)
-                    mat = materials.get(label)
-                else:
-                    hotspot_rgb_xy = None
-                    label, conf = "(hotspot out of RGB view)", 0.0
-                    mat = None
-                risk.update(hotspot.temp_c, mat)
-            else:
-                hotspot_rgb_xy = None
-                label, conf = "", 0.0
-                mat = None
-                risk.update(None, None)
-
-            print(format_status(fps, hotspot, label, conf, mat, risk,
-                                grid_cols, grid_rows))
-
-        draw_regions(frame, regions, materials)
-        draw_hud(frame, risk, hotspot, hotspot_rgb_xy, mat, fps)
-        cv2.imshow(RGB_WIN, frame)
-        cv2.imshow(THERMAL_WIN, render_thermal_view(tframe, hotspot))
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
-        if key in (ord("+"), ord("=")):
-            density = min(MAX_DENSITY, density + 1)
-            grid_cols, grid_rows = grid_for_density(density, *last_grid_dims)
-            patches, regions = [], []
-        elif key in (ord("-"), ord("_")):
-            density = max(MIN_DENSITY, density - 1)
-            grid_cols, grid_rows = grid_for_density(density, *last_grid_dims)
-            patches, regions = [], []
-        elif key == ord("."):
-            min_conf = min(MAX_CONFIDENCE_CEILING, min_conf + 5.0)
-            regions = aggregate_patches(patches, grid_cols, grid_rows, min_conf)
-            print(f"min_conf -> {min_conf:.0f}%")
-        elif key == ord(","):
-            min_conf = max(MIN_CONFIDENCE_FLOOR, min_conf - 5.0)
-            regions = aggregate_patches(patches, grid_cols, grid_rows, min_conf)
-            print(f"min_conf -> {min_conf:.0f}%")
-
-    cap.release()
-    cv2.destroyAllWindows()
+            draw_regions(frame, regions, materials)
+            with infer_worker._risk_lock:
+                draw_hud(frame, risk, hotspot, hotspot_rgb_xy, mat, fps)
+            cv2.imshow(RGB_WIN, frame)
+            cv2.imshow(THERMAL_WIN, render_thermal_view(tframe, live_hotspot))
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            if key in (ord("+"), ord("=")):
+                density = min(MAX_DENSITY, density + 1)
+                grid_cols, grid_rows = grid_for_density(density, *last_grid_dims)
+                patches, regions = [], []
+                infer_worker.bump_generation()
+            elif key in (ord("-"), ord("_")):
+                density = max(MIN_DENSITY, density - 1)
+                grid_cols, grid_rows = grid_for_density(density, *last_grid_dims)
+                patches, regions = [], []
+                infer_worker.bump_generation()
+            elif key == ord("."):
+                min_conf = min(MAX_CONFIDENCE_CEILING, min_conf + 5.0)
+                regions = aggregate_patches(patches, grid_cols, grid_rows, min_conf)
+                print(f"min_conf -> {min_conf:.0f}%")
+            elif key == ord(","):
+                min_conf = max(MIN_CONFIDENCE_FLOOR, min_conf - 5.0)
+                regions = aggregate_patches(patches, grid_cols, grid_rows, min_conf)
+                print(f"min_conf -> {min_conf:.0f}%")
+    finally:
+        infer_worker.stop()
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

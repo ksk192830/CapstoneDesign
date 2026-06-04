@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Root launcher — delegates to the CapstoneDesign laptop package."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "laptop" / "src"))
+
+from machine_vision_client.main import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()

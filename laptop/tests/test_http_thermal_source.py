@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "machine_vision_client"))
-
-from thermal import HttpThermalSource, THERMAL_W, THERMAL_H  # noqa: E402
+from machine_vision_client.thermal import HttpThermalSource, THERMAL_W, THERMAL_H
 
 
 class _FakeEsp(BaseHTTPRequestHandler):
@@ -80,7 +76,6 @@ def test_read_returns_parsed_frame_once_payload_is_good(fake_server):
         assert f.temps_c.shape == (THERMAL_H, THERMAL_W)
         assert f.temps_c.dtype == np.float32
         assert abs(float(f.temps_c[0, 0]) - 20.0) < 1e-3
-        # Index 767 → (767 % 100) * 0.1 = 6.7 → 26.7
         assert abs(float(f.temps_c[-1, -1]) - 26.7) < 1e-3
     finally:
         src.close()

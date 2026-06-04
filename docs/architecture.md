@@ -2,9 +2,10 @@
 
 This project is split into three main parts:
 
-- `firmware/esp32-p4`: ESP32-P4 firmware managed by PlatformIO.
-- `laptop`: Laptop-side vision, control, and communication software.
+- `firmware/esp32-p4-unified`: ESP32-P4 unified firmware (OV5647 + MLX90640) managed by PlatformIO.
+- `laptop`: Laptop-side vision, control, and communication software (`machine_vision_client` package).
 - `shared`: Protocol definitions and examples shared by both sides.
+- `docs`: Architecture, hardware, and protocol reference.
 
 Initial communication plan:
 

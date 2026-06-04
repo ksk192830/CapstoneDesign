@@ -1,0 +1,27 @@
+# Python
+.venv/
+.venv_windows/
+.venv_mac_old/
+venv_windows/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.merge-tmp/
+.capstone-ref/
+laptop/.pytest_cache/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+._*
+**/._*
+
+# PlatformIO build output
+**/.pio/
+firmware/**/managed_components/**/examples/
+firmware/**/managed_components/**/test_apps/

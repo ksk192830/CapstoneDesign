@@ -1,15 +1,10 @@
-from machine_vision_client.video.visible_stream import VisibleStream
+"""Entry points for the laptop-side machine vision client."""
+
+from machine_vision_client.heat_algorithm import main as run_heat_algorithm
 
 
 def main() -> None:
-    stream = VisibleStream()
-    try:
-        print(f"Opening visible stream from: {stream.url}")
-        stream.show()
-    except RuntimeError as error:
-        print(f"Stream error: {error}")
-    finally:
-        stream.release()
+    run_heat_algorithm()
 
 
 if __name__ == "__main__":
