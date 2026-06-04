@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "type": "control",
+  "seq": 10,
+  "timestamp_ms": 123456,
+  "payload": {
+    "mode": "manual",
+    "ttl_ms": 300,
+    "motors": {
+      "left": 0,
+      "right": 0
+    },
+    "servos": {
+      "camera_pan": 90,
+      "camera_tilt": 90
+    }
+  }
+}

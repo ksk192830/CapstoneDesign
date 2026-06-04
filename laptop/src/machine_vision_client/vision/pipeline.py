@@ -1,0 +1,3 @@
+class VisionPipeline:
+    pass
+

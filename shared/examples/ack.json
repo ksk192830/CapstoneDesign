@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "type": "ack",
+  "seq": 21,
+  "timestamp_ms": 123510,
+  "payload": {
+    "ack_type": "control",
+    "ack_seq": 10,
+    "result": "ok"
+  }
+}
+

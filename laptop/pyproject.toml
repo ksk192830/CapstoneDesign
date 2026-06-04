@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "machine-vision-client"
+version = "0.1.0"
+description = "Laptop-side vision and control client for ESP32-P4 machine project"
+requires-python = ">=3.10"
+dependencies = [
+  "opencv-python",
+  "websockets",
+  "torch",
+  "transformers",
+  "pillow",
+  "huggingface_hub",
+  "numpy",
+  "openpyxl",
+  "pyserial",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
