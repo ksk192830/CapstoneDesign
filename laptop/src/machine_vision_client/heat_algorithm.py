@@ -34,7 +34,9 @@ from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 from machine_vision_client.config import (
+    CAR_CONTROL_ENABLED,
     LOCAL_DEV,
+    MOTOR_BASE_URL,
     RGB_H,
     RGB_SOURCE,
     RGB_W,
@@ -42,6 +44,8 @@ from machine_vision_client.config import (
     THERMAL_HTTP_URL,
     THERMAL_PORT,
 )
+from machine_vision_client.control.drive_panel import CAR_WIN, DrivePanel
+from machine_vision_client.control.motor_http import MotorHttpClient
 from machine_vision_client.materials import Material, load_materials
 from machine_vision_client.risk import RiskState
 import numpy as np
@@ -732,7 +736,14 @@ def main():
         print("[config] LOCAL_DEV: webcam index 0 + mock thermal")
     materials = load_materials()
     print(f"Loaded {len(materials)} materials from xlsx.")
-    print(f"OpenCV windows: '{RGB_WIN}' and '{THERMAL_WIN}'")
+    windows = [RGB_WIN, THERMAL_WIN]
+    drive: DrivePanel | None = None
+    if CAR_CONTROL_ENABLED:
+        drive = DrivePanel(MotorHttpClient(MOTOR_BASE_URL))
+        drive.start()
+        windows.insert(0, CAR_WIN)
+        print(f"[car] motor control enabled -> {MOTOR_BASE_URL}")
+    print(f"OpenCV windows: {windows}")
 
     processor, model, device = load_model()
     risk = RiskState()
@@ -772,7 +783,9 @@ def main():
     prev_time = time.time()
     fps = 0.0
 
-    print("Press 'q' to quit. '+' / '-' adjusts grid density. ',' / '.' adjusts min confidence.")
+    print("Press Esc or 'q' in the RGB window to quit. '+' / '-' adjusts grid density.")
+    if drive:
+        print("[car] Car Control window: drag stick or hold WASD (Q/E rotate via on-screen buttons).")
     print("[infer] material classification runs on a background thread (display stays live).")
     consecutive_failures = 0
     is_network_source = isinstance(RGB_SOURCE, str)
@@ -784,7 +797,7 @@ def main():
                 if is_network_source and consecutive_failures < 30:
                     cv2.imshow("Heat Algorithm",
                                make_error_frame(RGB_W, RGB_H, "Waiting for stream..."))
-                    if cv2.waitKey(33) & 0xFF == ord("q"):
+                    if cv2.waitKey(33) & 0xFF in (ord("q"), 27):
                         break
                     if consecutive_failures % 10 == 0:
                         print(f"[rgb] stream stalled; reopening {RGB_SOURCE!r}")
@@ -834,8 +847,13 @@ def main():
                 draw_hud(frame, risk, hotspot, hotspot_rgb_xy, mat, fps)
             cv2.imshow(RGB_WIN, frame)
             cv2.imshow(THERMAL_WIN, render_thermal_view(tframe, live_hotspot))
+            if drive is not None:
+                drive.render()
             key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            if drive is not None and key not in (0, 255):
+                if drive.handle_key(key):
+                    key = 0
+            if key == ord("q") or key == 27:
                 break
             if key in (ord("+"), ord("=")):
                 density = min(MAX_DENSITY, density + 1)
@@ -856,6 +874,8 @@ def main():
                 regions = aggregate_patches(patches, grid_cols, grid_rows, min_conf)
                 print(f"min_conf -> {min_conf:.0f}%")
     finally:
+        if drive is not None:
+            drive.stop()
         infer_worker.stop()
         cap.release()
         cv2.destroyAllWindows()

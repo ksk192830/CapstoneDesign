@@ -55,6 +55,8 @@ Board IP and dev mode are set in `laptop/src/machine_vision_client/config.py`, o
 | Variable | Purpose |
 |---|---|
 | `ESP32_HOST` | Board IP on the LAN (default `172.20.10.8`) |
+| `FIRMWARE_PROFILE` | `esp32-p4` (car + heat, default) or `esp32-p4-unified` (heat only) |
+| `CAR_CONTROL` | `1` / `0` — omni-wheel panel (auto-on for `esp32-p4`) |
 | `HEAT_LOCAL=1` | Webcam index 0 + mock thermal — no ESP32 needed |
 | `THERMAL_PORT` | USB serial override (`COM3`, `/dev/cu.usbmodem3101`, …) |
 
@@ -185,7 +187,32 @@ Or edit `ESP32_HOST` in `laptop/src/machine_vision_client/config.py`.
 
 ---
 
-## Running the algorithm
+## Running the unified app (car + heat algorithm)
+
+Flash **`firmware/esp32-p4`** (motor control + camera + thermal). Then from the repo root:
+
+```bash
+export ESP32_HOST=172.20.10.8
+.venv/bin/python heat_algorithm
+```
+
+Three OpenCV windows open:
+
+| Window | Purpose |
+|---|---|
+| **Car Control** | Drag the virtual stick or hold on-screen WASD; Q/E buttons rotate |
+| **Fire Risk - RGB** | Material grid, hotspot HUD, risk score |
+| **Fire Risk - Thermal** | Live thermal view |
+
+- **Space** in the Car Control window — emergency stop
+- **Esc** or **q** in the RGB window — quit the app
+
+Heat-only (no car): flash `firmware/esp32-p4-unified` and run with  
+`FIRMWARE_PROFILE=esp32-p4-unified CAR_CONTROL=0 .venv/bin/python heat_algorithm`
+
+---
+
+## Running heat algorithm only
 
 From the repo root:
 
@@ -193,20 +220,7 @@ From the repo root:
 .venv/bin/python heat_algorithm
 ```
 
-Or CapstoneDesign style from `laptop/`:
-
-```bash
-cd laptop
-../.venv/bin/python -m machine_vision_client.main
-```
-
-**Local dev (no ESP32):**
-
-```bash
-HEAT_LOCAL=1 .venv/bin/python heat_algorithm
-```
-
-Two OpenCV windows open: **Fire Risk - RGB** and **Fire Risk - Thermal**. Press **`q`** in the RGB window to quit.
+With **`FIRMWARE_PROFILE=esp32-p4-unified`**, two OpenCV windows open: **Fire Risk - RGB** and **Fire Risk - Thermal**. Press **`q`** or **Esc** in the RGB window to quit.
 
 First run downloads the HuggingFace model `prithivMLmods/Minc-Materials-23` (~350 MB); later runs use the cache at `~/.cache/huggingface/`.
 

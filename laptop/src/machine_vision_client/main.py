@@ -1,10 +1,10 @@
-"""Entry points for the laptop-side machine vision client."""
+"""Unified app: car control + heat-algorithm vision in separate OpenCV windows."""
 
-from machine_vision_client.heat_algorithm import main as run_heat_algorithm
+from machine_vision_client.heat_algorithm import main as run_unified
 
 
 def main() -> None:
-    run_heat_algorithm()
+    run_unified()
 
 
 if __name__ == "__main__":
