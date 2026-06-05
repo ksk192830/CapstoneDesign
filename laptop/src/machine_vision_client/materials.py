@@ -32,6 +32,17 @@ class Material:
     note: str
 
 
+def ignition_threshold_c(material: "Material | None") -> float | None:
+    """Earliest plausible autoignition temperature (degC) for `material`:
+    the low end of its AIT range. Returns None when the material is
+    unknown or has no ignition data. Single source of truth for the
+    "low end = earliest ignition" decision used by both the risk score
+    and the ignition-warning monitor."""
+    if material is None or material.ignition_c is None:
+        return None
+    return float(material.ignition_c[0])
+
+
 def _parse_ignition(cell) -> tuple[float, float] | None:
     if cell is None:
         return None

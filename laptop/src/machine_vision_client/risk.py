@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from machine_vision_client.materials import Material
+from machine_vision_client.materials import Material, ignition_threshold_c
+
+# A temperature history is an ordered sequence of (timestamp_s, temp_c)
+# samples — a RiskState deque or the ignition monitor's sample list.
+TempHistory = Sequence[tuple[float, float]]
 
 
 @dataclass
@@ -23,23 +28,42 @@ class TtiEstimate:
     dt_per_s: float
 
 
-def estimate_tti(history: deque, ignite_c: float) -> TtiEstimate:
-    """Linear extrapolation TTI = (T_ignite - T_now) / (dT/dt)."""
+def fit_rate_c_per_s(history: TempHistory) -> float:
+    """Least-squares rise rate (degC/s) over (t, temp) samples.
+
+    Robust to the frame-to-frame jitter MLX90640 produces, unlike a
+    two-point (last-first)/dt slope that swings with noisy endpoints.
+    Returns 0.0 for fewer than two samples or zero time spread.
+    """
+    n = len(history)
+    if n < 2:
+        return 0.0
+    t0 = history[0][0]
+    xs = [t - t0 for t, _ in history]
+    ys = [temp for _, temp in history]
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    den = sum((x - mean_x) ** 2 for x in xs)
+    if den <= 0:
+        return 0.0
+    return num / den
+
+
+def estimate_tti(history: TempHistory, ignite_c: float) -> TtiEstimate:
+    """Linear extrapolation TTI = (T_ignite - T_now) / (dT/dt), with the
+    rate fitted by least squares over the whole history."""
     if not history:
         return TtiEstimate(None, 0.0, ignite_c, 0.0)
+    t_now = history[-1][1]
     if len(history) < 2:
-        return TtiEstimate(None, history[-1][1], ignite_c, 0.0)
-    t0, T0 = history[0]
-    t1, T1 = history[-1]
-    dt = t1 - t0
-    if dt <= 0:
-        return TtiEstimate(None, T1, ignite_c, 0.0)
-    rate = (T1 - T0) / dt
-    if T1 >= ignite_c:
-        return TtiEstimate(0.0, T1, ignite_c, rate)
+        return TtiEstimate(None, t_now, ignite_c, 0.0)
+    rate = fit_rate_c_per_s(history)
+    if t_now >= ignite_c:
+        return TtiEstimate(0.0, t_now, ignite_c, rate)
     if rate <= 0:
-        return TtiEstimate(None, T1, ignite_c, rate)
-    return TtiEstimate((ignite_c - T1) / rate, T1, ignite_c, rate)
+        return TtiEstimate(None, t_now, ignite_c, rate)
+    return TtiEstimate((ignite_c - t_now) / rate, t_now, ignite_c, rate)
 
 
 def tti_points(tti_sec: float | None) -> int:
@@ -87,12 +111,12 @@ class RiskState:
 
         self.score += 2
 
-        if material.ignition_c is None:
+        ignite_lo = ignition_threshold_c(material)
+        if ignite_lo is None:
             self.last_event = f"flammable {material.label} (no AIT data)"
             self.last_tti = None
             return
 
-        ignite_lo = material.ignition_c[0]
         tti = estimate_tti(self.history, ignite_lo)
         self.last_tti = tti
         pts = tti_points(tti.seconds)

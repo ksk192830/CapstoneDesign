@@ -20,9 +20,14 @@ from machine_vision_client.config import (
     WEB_HOST,
     WEB_PORT,
 )
+from machine_vision_client.ignition_warning import IgnitionTrendMonitor
 from machine_vision_client.materials import load_materials
 from machine_vision_client.thermal import detect_hotspot
-from machine_vision_client.ui.debug_viewer import DebugViewer, format_status
+from machine_vision_client.ui.debug_viewer import (
+    DebugViewer,
+    draw_ignition_overlay,
+    format_status,
+)
 from machine_vision_client.ui.web_server import FrameBus, HeatWebServer
 from machine_vision_client.video.thermal_stream import ThermalStream
 from machine_vision_client.video.visible_stream import VisibleStream, make_error_frame
@@ -60,7 +65,12 @@ def main() -> None:
     visible = VisibleStream()
     print(f"Opening RGB source: {RGB_SOURCE!r}")
 
+    # Trend-based ignition-risk early warning. Owns its own state machine +
+    # timing; updated once per frame off the live hotspot, never blocks.
+    ignition_monitor = IgnitionTrendMonitor()
+
     last_result = None
+    current_mat = None
     frame_count = 0
     prev_time = time.time()
     fps = 0.0
@@ -97,19 +107,28 @@ def main() -> None:
             tframe = thermal.read()
             live_hotspot = detect_hotspot(tframe, threshold_c=HOTSPOT_THRESHOLD_C)
 
+            # Sample the live hotspot every frame so the trend window fills
+            # without blocking. `current_mat` is the most recently identified
+            # material from the (async) inference worker.
+            ignition_monitor.update(live_hotspot, current_mat, now)
+
             if frame_count % PREDICT_EVERY_N_FRAMES == 0:
                 pipeline.submit(frame, tframe)
 
             result = pipeline.try_take_result()
             if result is not None:
                 last_result = result
+                current_mat = result.mat
                 with pipeline.risk_lock:
                     cols, rows = pipeline.grid
                     print(format_status(fps, result.hotspot, result.label, result.conf,
-                                        result.mat, pipeline.risk, cols, rows))
+                                        result.mat, pipeline.risk, cols, rows)
+                          + "  " + ignition_monitor.status_line())
 
             with pipeline.risk_lock:
                 rgb_annotated = viewer.annotate_rgb(frame, last_result, pipeline.risk, fps)
+            # Ignition-risk popup/overlay drawn on top of the HUD (UI layer).
+            draw_ignition_overlay(rgb_annotated, ignition_monitor, now)
             bus.publish("rgb", _jpeg(rgb_annotated))
             bus.publish("thermal", _jpeg(viewer.render_thermal(tframe, live_hotspot)))
 

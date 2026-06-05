@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import cv2
 
+from machine_vision_client.ignition_warning import HORIZON_S, MIN_RISE_RATE_C_PER_S, Phase
 from machine_vision_client.thermal import render_thermal_view
 
 WARM_THRESHOLD_C = 35.0   # below this, a tile is treated as ambient (gray)
@@ -170,3 +171,77 @@ class DebugViewer:
 
     def render_thermal(self, tframe, live_hotspot):
         return render_thermal_view(tframe, live_hotspot)
+
+
+def _overlay_box(frame, lines, color, anchor="center"):
+    """Translucent boxed text popup, centered or top-anchored."""
+    h, w = frame.shape[:2]
+    pad = 16
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scales = [0.9] + [0.6] * (len(lines) - 1)
+    sizes = [cv2.getTextSize(t, font, s, 2)[0] for t, s in zip(lines, scales)]
+    box_w = max(tw for tw, _ in sizes) + pad * 2
+    line_h = max(th for _, th in sizes) + 12
+    box_h = line_h * len(lines) + pad
+    x0 = max(0, (w - box_w) // 2)
+    y0 = max(0, (h - box_h) // 2 if anchor == "center" else 20)
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, dst=frame)
+    cv2.rectangle(frame, (x0, y0), (x0 + box_w, y0 + box_h), color, 2)
+    y = y0 + pad + sizes[0][1]
+    for txt, scale in zip(lines, scales):
+        cv2.putText(frame, txt, (x0 + pad, y), font, scale, color, 2, cv2.LINE_AA)
+        y += line_h
+
+
+def draw_ignition_overlay(frame, monitor, now: float) -> None:
+    """Render the ignition-warning popup for the monitor's current phase.
+
+    The monitor is pure state; all OpenCV drawing for the alert lives
+    here in the UI layer. IDLE draws nothing (the HUD already shows
+    ongoing risk)."""
+    phase = monitor.phase
+    if phase is Phase.MEASURING:
+        remain = monitor.measure_remaining_s(now)
+        _overlay_box(
+            frame,
+            ["HOLD - MEASURING HEAT TREND",
+             f"Sampling temperature... {remain:0.1f}s",
+             "Please keep the source steady."],
+            (40, 200, 255),  # amber (BGR)
+        )
+    elif phase is Phase.WARNING:
+        eta = monitor.eta_to_ait_s or 0.0
+        mat = monitor.material_label or "material"
+        ait_txt = f"{monitor.ait_c:.0f}C" if monitor.ait_c is not None else "ignition temp"
+        if eta <= 0:
+            head, eta_line = "WARNING: AT IGNITION-RISK TEMPERATURE", "Already at/above ignition threshold"
+        else:
+            head = "WARNING: IGNITION RISK"
+            eta_line = f"Estimated time to ignition: ~{eta / 60:0.1f} min  ({ait_txt})"
+        _overlay_box(
+            frame,
+            [head,
+             eta_line,
+             ">> DISPATCH NOW - respond immediately <<",
+             f"{mat}  |  rise {monitor.rise_rate_c_per_s * 60:0.1f} C/min",
+             "Trend estimate - not a precise countdown"],
+            (40, 40, 240),  # red (BGR)
+        )
+    elif phase is Phase.SAFE:
+        _overlay_box(
+            frame,
+            ["SAFE - TEMPERATURE FALLING",
+             "No ignition risk on current trend.",
+             "OK to proceed / resume driving.",
+             f"cooling {abs(monitor.rise_rate_c_per_s) * 60:0.1f} C/min"],
+            (80, 200, 80),  # green (BGR)
+        )
+    elif phase is Phase.MONITORING:
+        eta = monitor.eta_to_ait_s
+        if eta is not None and monitor.rise_rate_c_per_s >= MIN_RISE_RATE_C_PER_S:
+            note = f"Rising, est. ignition in ~{eta / 60:0.0f} min (beyond {HORIZON_S / 60:0.0f} min)"
+        else:
+            note = "Temperature steady - monitoring"
+        _overlay_box(frame, ["MONITORING", note], (40, 200, 255), anchor="top")
