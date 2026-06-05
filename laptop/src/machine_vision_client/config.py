@@ -14,10 +14,13 @@ import sys
 
 ESP32_HOST = os.environ.get("ESP32_HOST", "172.20.10.8")
 
-# HTTP endpoints (firmware/esp32-p4-unified: camera on :80, thermal on :81).
-VISIBLE_STREAM_URL = f"http://{ESP32_HOST}/stream.mjpg"
+# HTTP endpoints for firmware/esp32-p4 (camera + thermal + motor on one board):
+#   port 81 -> MJPEG camera stream (/stream.mjpg)
+#   port 80 -> still JPEG, thermal frame, and /control/* motor endpoints
+# (firmware/esp32-p4-unified uses the opposite split: camera :80, thermal :81.)
+VISIBLE_STREAM_URL = f"http://{ESP32_HOST}:81/stream.mjpg"
 VISIBLE_JPEG_URL = f"http://{ESP32_HOST}/capture/visible.jpg"
-THERMAL_FRAME_URL = f"http://{ESP32_HOST}:81/thermal/frame"
+THERMAL_FRAME_URL = f"http://{ESP32_HOST}/thermal/frame"
 
 RGB_W = 640
 RGB_H = 480
