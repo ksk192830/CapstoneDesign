@@ -88,10 +88,12 @@ def main() -> None:
             frame = visible.read()
             if frame is None:
                 consecutive_failures += 1
-                if is_network_source and consecutive_failures < 30:
+                # A network source (ESP32 over WiFi) can drop and come back —
+                # keep waiting and reconnecting indefinitely rather than exiting.
+                if is_network_source:
                     bus.publish("rgb", _jpeg(make_error_frame(RGB_W, RGB_H, "Waiting for stream...")))
                     if consecutive_failures % 10 == 0:
-                        print(f"[rgb] stream stalled; reopening {RGB_SOURCE!r}")
+                        print(f"[rgb] stream stalled ({consecutive_failures}x); reopening {RGB_SOURCE!r}")
                         try:
                             visible.reopen()
                         except RuntimeError as e:

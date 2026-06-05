@@ -111,9 +111,19 @@ class VisibleStream:
         return self._cap.isOpened()
 
     def read(self):
+        """Return a BGR frame, or None on any failure (never raises).
+
+        A network source (ESP32 MJPEG) can drop at any time; returning None
+        lets the caller wait and reconnect instead of crashing the app."""
         if self._cap is None:
-            self.open()
-        ok, frame = self._cap.read()
+            try:
+                self.open()
+            except RuntimeError:
+                return None
+        try:
+            ok, frame = self._cap.read()
+        except Exception:  # noqa: BLE001 - cv2/urllib can raise on a dead stream
+            return None
         return frame if ok else None
 
     def reopen(self) -> None:
