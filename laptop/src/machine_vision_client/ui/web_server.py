@@ -86,11 +86,12 @@ class FrameBus:
 class HeatWebServer:
     """Flask app streaming the two heat feeds + live-tuning control endpoints."""
 
-    def __init__(self, bus: FrameBus, pipeline, host: str, port: int):
+    def __init__(self, bus: FrameBus, pipeline, host: str, port: int, motor=None):
         self._bus = bus
         self._pipeline = pipeline
         self._host = host
         self._port = port
+        self._motor = motor
         self._app = Flask(__name__)
         self._register_routes()
 
@@ -124,6 +125,19 @@ class HeatWebServer:
         def min_conf():
             delta = float(request.args.get("delta", "0"))
             return jsonify(min_conf=self._pipeline.adjust_min_conf(delta))
+
+        @app.route("/control/drive", methods=["POST"])
+        def drive():
+            data = request.get_json(silent=True) or {}
+            try:
+                x = float(data.get("x", 0.0))
+                y = float(data.get("y", 0.0))
+                r = float(data.get("r", 0.0))
+            except (TypeError, ValueError):
+                return jsonify(error="invalid drive vector"), 400
+            if self._motor is not None:
+                self._motor.set_vector(x, y, r)
+            return jsonify(ok=True)
 
     def start(self) -> threading.Thread:
         thread = threading.Thread(
