@@ -14,6 +14,7 @@ import cv2
 
 from machine_vision_client.config import (
     LOCAL_DEV,
+    MOTOR_BASE_URL,
     RGB_H,
     RGB_SOURCE,
     RGB_W,
@@ -28,6 +29,7 @@ from machine_vision_client.ui.debug_viewer import (
     draw_ignition_overlay,
     format_status,
 )
+from machine_vision_client.control.motor_http import MotorHttpClient
 from machine_vision_client.ui.web_server import FrameBus, HeatWebServer
 from machine_vision_client.video.thermal_stream import ThermalStream
 from machine_vision_client.video.visible_stream import VisibleStream, make_error_frame
@@ -57,8 +59,11 @@ def main() -> None:
     viewer = DebugViewer(materials)
     bus = FrameBus()
 
-    server = HeatWebServer(bus, pipeline, WEB_HOST, WEB_PORT)
+    motor = MotorHttpClient(MOTOR_BASE_URL)
+    motor.start()
+    server = HeatWebServer(bus, pipeline, WEB_HOST, WEB_PORT, motor=motor)
     server.start()
+    print(f"[control] motor commands -> {MOTOR_BASE_URL}")
     shown_host = "localhost" if WEB_HOST in ("0.0.0.0", "") else WEB_HOST
     print(f"[web] heat feeds at http://{shown_host}:{WEB_PORT}  (Ctrl-C to stop)")
 
@@ -138,6 +143,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[web] shutting down.")
     finally:
+        motor.stop()
         pipeline.stop()
         visible.release()
 
