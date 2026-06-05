@@ -39,6 +39,12 @@ else:
     RGB_SOURCE: int | str = VISIBLE_STREAM_URL
     THERMAL_HTTP_URL: str | None = THERMAL_FRAME_URL
 
+# Motor control host. Defaults to the camera/thermal board (ESP32_HOST) so
+# the laptop assumes the one-board end state; override with MOTOR_HOST while
+# motors live on a separate board.
+MOTOR_HOST = os.environ.get("MOTOR_HOST", ESP32_HOST)
+MOTOR_BASE_URL = f"http://{MOTOR_HOST}"
+
 # Heat web interface (browser-viewable on the LAN).
 WEB_HOST = os.environ.get("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.environ.get("WEB_PORT", "8000"))
