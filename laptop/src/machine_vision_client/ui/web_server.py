@@ -145,6 +145,20 @@ class HeatWebServer:
                 self._motor.set_vector(0.0, 0.0, 0.0)
             return jsonify(ok=True)
 
+        @app.route("/status")
+        def status():
+            with self._pipeline.risk_lock:
+                score = self._pipeline.risk.score
+                event = self._pipeline.risk.last_event
+            motor = self._motor
+            return jsonify(
+                risk=score,
+                event=event,
+                motor_ok=(motor is not None and motor.last_error is None),
+                motor_error=(motor.last_error if motor is not None else "no motor"),
+                motor_status=(motor.last_status if motor is not None else None),
+            )
+
     def start(self) -> threading.Thread:
         thread = threading.Thread(
             target=lambda: self._app.run(

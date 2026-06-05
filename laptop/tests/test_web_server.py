@@ -111,3 +111,23 @@ def test_control_stop_zeroes_motor_vector():
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
     assert motor.calls == [(0.0, 0.0, 0.0)]
+
+
+def test_status_reports_risk_and_motor_health():
+    client, _bus, _pipe, _motor = _client()
+    resp = client.get("/status")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["risk"] == 7
+    assert body["event"] == "test event"
+    assert body["motor_ok"] is True
+    assert body["motor_error"] is None
+    assert body["motor_status"] == {"state": "ok"}
+
+
+def test_status_reports_motor_offline_on_error():
+    client, _bus, _pipe, motor = _client()
+    motor.last_error = "connection refused"
+    body = client.get("/status").get_json()
+    assert body["motor_ok"] is False
+    assert body["motor_error"] == "connection refused"
