@@ -80,12 +80,21 @@
     pressed.clear(); keyVec={x:0,y:0,r:0}; joyVec={x:0,y:0}; rotBtn=0;
     try{ await fetch('/control/stop',{method:'POST'}); }catch(e){}
   }
+  function maybeStop(){
+    // Once every input is released, stop immediately rather than waiting for
+    // the next drive tick — keeps release latency low (firmware TTL is only a
+    // backstop). No-op while any other input is still held.
+    const v=current();
+    if(v.x===0 && v.y===0 && v.r===0){
+      try{ fetch('/control/stop',{method:'POST'}); }catch(e){}
+    }
+  }
 
   // Rotate buttons: hold to rotate. pointerup is on window so releasing the
   // pointer anywhere (even off the button) always clears the rotation.
   document.getElementById('rotL').addEventListener('pointerdown',()=>{rotBtn=1;});
   document.getElementById('rotR').addEventListener('pointerdown',()=>{rotBtn=-1;});
-  window.addEventListener('pointerup',()=>{rotBtn=0;});
+  window.addEventListener('pointerup',()=>{rotBtn=0; maybeStop();});
 
   setInterval(send, 66);  // ~15 Hz drive loop
 
@@ -96,7 +105,7 @@
   });
   document.addEventListener('keyup',e=>{
     const k=e.key.toLowerCase();
-    if(KEYMAP[k]){pressed.delete(k); recompute();}
+    if(KEYMAP[k]){pressed.delete(k); recompute(); maybeStop();}
   });
   window.addEventListener('blur',stopNow);
 
@@ -116,7 +125,7 @@
     setNub(p.clientX-rect.left-CENTER, p.clientY-rect.top-CENTER);
   }
   function joyStart(e){dragging=true; joyMove(e);}
-  function joyEnd(){dragging=false; joyVec={x:0,y:0}; nub.style.left=R+'px'; nub.style.top=R+'px';}
+  function joyEnd(){dragging=false; joyVec={x:0,y:0}; nub.style.left=R+'px'; nub.style.top=R+'px'; maybeStop();}
   joy.addEventListener('pointerdown',joyStart);
   window.addEventListener('pointermove',joyMove);
   window.addEventListener('pointerup',joyEnd);
@@ -129,9 +138,11 @@
     try{
       const s=await (await fetch('/status')).json();
       const rb=document.getElementById('risk');
+      // Provisional danger cutoff; risk.py's score is an unbounded accumulator.
       rb.textContent='RISK '+s.risk; rb.className='badge '+(s.risk>3?'bad':'ok');
       const mb=document.getElementById('motor');
       mb.textContent=s.motor_ok?'motor ok':'motor offline';
+      mb.title=s.motor_error||'';   // hover shows the transport error when offline
       mb.className='badge '+(s.motor_ok?'ok':'bad');
     }catch(e){}
   },500);

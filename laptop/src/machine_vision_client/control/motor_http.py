@@ -53,22 +53,6 @@ class MotorHttpClient:
         with self._lock:
             self._vector = DriveVector(x, y, r)
 
-    def set_pressed_keys(self, keys: set[str]) -> None:
-        x = y = r = 0.0
-        if "d" in keys:
-            x += 1.0
-        if "a" in keys:
-            x -= 1.0
-        if "w" in keys:
-            y += 1.0
-        if "s" in keys:
-            y -= 1.0
-        if "q" in keys:
-            r += 1.0
-        if "e" in keys:
-            r -= 1.0
-        self.set_vector(x, y, r)
-
     @property
     def last_error(self) -> str | None:
         return self._last_error
