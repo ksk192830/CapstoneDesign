@@ -11,48 +11,9 @@ from __future__ import annotations
 
 import threading
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, render_template, request
 
 _BOUNDARY = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-
-_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Fire Risk - Heat Algorithm</title>
-<style>
-  body{margin:0;background:#111;color:#ddd;font-family:system-ui,sans-serif}
-  h1{font-size:18px;padding:10px 14px;margin:0;background:#000}
-  .feeds{display:flex;flex-wrap:wrap;gap:12px;padding:12px}
-  .feed{background:#000;border:1px solid #333;border-radius:6px;padding:6px}
-  .feed h2{font-size:13px;margin:4px 6px;color:#9af}
-  img{display:block;max-width:100%;height:auto;background:#222}
-  .controls{padding:0 14px 14px}
-  button{background:#223;color:#cde;border:1px solid #456;border-radius:5px;
-         padding:6px 12px;margin:3px;cursor:pointer;font-size:14px}
-  button:hover{background:#345}
-  #status{font-size:12px;color:#8a8;margin-left:8px}
-</style></head>
-<body>
-  <h1>Fire Risk - Heat Algorithm</h1>
-  <div class="feeds">
-    <div class="feed"><h2>RGB + material / risk overlay</h2>
-      <img src="/rgb.mjpg" alt="rgb"></div>
-    <div class="feed"><h2>Thermal (cropped)</h2>
-      <img src="/thermal.mjpg" alt="thermal"></div>
-  </div>
-  <div class="controls">
-    <button onclick="ctl('density',1)">grid +</button>
-    <button onclick="ctl('density',-1)">grid -</button>
-    <button onclick="ctl('min_conf',5)">min-conf +</button>
-    <button onclick="ctl('min_conf',-5)">min-conf -</button>
-    <span id="status"></span>
-  </div>
-  <script>
-    async function ctl(name, delta){
-      const r = await fetch(`/control/${name}?delta=${delta}`, {method:'POST'});
-      const j = await r.json();
-      document.getElementById('status').textContent = JSON.stringify(j);
-    }
-  </script>
-</body></html>"""
 
 
 class FrameBus:
@@ -104,7 +65,7 @@ class HeatWebServer:
 
         @app.route("/")
         def index():
-            return Response(_PAGE, mimetype="text/html")
+            return render_template("index.html")
 
         @app.route("/rgb.mjpg")
         def rgb():

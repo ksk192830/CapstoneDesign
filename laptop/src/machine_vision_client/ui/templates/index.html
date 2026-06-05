@@ -1,0 +1,139 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fire Risk - Unified Control</title>
+<style>
+  body{margin:0;background:#111;color:#ddd;font-family:system-ui,sans-serif}
+  h1{font-size:18px;padding:10px 14px;margin:0;background:#000;display:flex;justify-content:space-between;align-items:center}
+  .badge{padding:2px 8px;border-radius:4px;margin-left:6px;font-size:13px}
+  .ok{background:#1a3} .bad{background:#a22}
+  .feeds{display:flex;flex-wrap:wrap;gap:12px;padding:12px}
+  .feed{background:#000;border:1px solid #333;border-radius:6px;padding:6px}
+  .feed h2{font-size:13px;margin:4px 6px;color:#9af}
+  img{display:block;max-width:100%;height:auto;background:#222}
+  .control{display:flex;gap:24px;align-items:center;padding:12px 14px;border-top:1px solid #333}
+  #joy{width:180px;height:180px;border-radius:50%;background:#1a1a22;border:1px solid #456;position:relative;touch-action:none;flex:none}
+  #nub{width:54px;height:54px;border-radius:50%;background:#48c;position:absolute;left:63px;top:63px}
+  button{background:#223;color:#cde;border:1px solid #456;border-radius:5px;padding:8px 14px;margin:3px;cursor:pointer;font-size:14px}
+  button:hover{background:#345}
+  #stop{background:#a22;color:#fff;font-weight:bold}
+  .hint{font-size:12px;color:#888;margin-bottom:4px}
+  #status{font-size:12px;color:#8a8;margin-top:4px}
+</style></head>
+<body>
+  <h1>Fire Risk - Unified Control
+    <span>
+      <span id="risk" class="badge">RISK -</span>
+      <span id="motor" class="badge">motor ?</span>
+    </span>
+  </h1>
+  <div class="feeds">
+    <div class="feed"><h2>RGB + material / risk overlay</h2>
+      <img src="/rgb.mjpg" alt="rgb"></div>
+    <div class="feed"><h2>Thermal (cropped)</h2>
+      <img src="/thermal.mjpg" alt="thermal"></div>
+  </div>
+  <div class="control">
+    <div id="joy"><div id="nub"></div></div>
+    <div>
+      <div class="hint">Drive: <b>W A S D</b> move, <b>Q E</b> rotate, <b>Space</b> stop. Drag the joystick on touch.</div>
+      <div>
+        <button id="rotL">&#8634; rotate L (Q)</button>
+        <button id="rotR">rotate R (E) &#8635;</button>
+        <button id="stop" onclick="stopNow()">STOP (space)</button>
+      </div>
+      <div>
+        <button onclick="ctl('density',1)">grid +</button>
+        <button onclick="ctl('density',-1)">grid -</button>
+        <button onclick="ctl('min_conf',5)">min-conf +</button>
+        <button onclick="ctl('min_conf',-5)">min-conf -</button>
+      </div>
+      <div id="status"></div>
+    </div>
+  </div>
+<script>
+  let keyVec={x:0,y:0,r:0};
+  let joyVec={x:0,y:0};
+  let rotBtn=0;
+  const pressed=new Set();
+  const KEYMAP={w:['y',1],s:['y',-1],d:['x',1],a:['x',-1],q:['r',1],e:['r',-1]};
+
+  function recompute(){
+    let x=0,y=0,r=0;
+    for(const k of pressed){const m=KEYMAP[k]; if(!m)continue;
+      if(m[0]==='x')x+=m[1]; else if(m[0]==='y')y+=m[1]; else r+=m[1];}
+    keyVec={x,y,r};
+  }
+  function current(){
+    // Joystick overrides keyboard translation only while actually engaged.
+    const joyActive = joyVec.x!==0 || joyVec.y!==0;
+    return {
+      x: joyActive ? joyVec.x : keyVec.x,
+      y: joyActive ? joyVec.y : keyVec.y,
+      r: rotBtn || keyVec.r,
+    };
+  }
+  async function send(){
+    const v=current();
+    try{ await fetch('/control/drive',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}); }catch(e){}
+  }
+  async function stopNow(){
+    pressed.clear(); keyVec={x:0,y:0,r:0}; joyVec={x:0,y:0}; rotBtn=0;
+    try{ await fetch('/control/stop',{method:'POST'}); }catch(e){}
+  }
+
+  // Rotate buttons: hold to rotate. pointerup is on window so releasing the
+  // pointer anywhere (even off the button) always clears the rotation.
+  document.getElementById('rotL').addEventListener('pointerdown',()=>{rotBtn=1;});
+  document.getElementById('rotR').addEventListener('pointerdown',()=>{rotBtn=-1;});
+  window.addEventListener('pointerup',()=>{rotBtn=0;});
+
+  setInterval(send, 66);  // ~15 Hz drive loop
+
+  document.addEventListener('keydown',e=>{
+    const k=e.key.toLowerCase();
+    if(k===' '){e.preventDefault(); stopNow(); return;}
+    if(KEYMAP[k]){pressed.add(k); recompute();}
+  });
+  document.addEventListener('keyup',e=>{
+    const k=e.key.toLowerCase();
+    if(KEYMAP[k]){pressed.delete(k); recompute();}
+  });
+  window.addEventListener('blur',stopNow);
+
+  const joy=document.getElementById('joy'), nub=document.getElementById('nub');
+  let dragging=false;
+  const CENTER=joy.offsetWidth/2;          // dial radius (px)
+  const R=CENTER-nub.offsetWidth/2;        // nub-home offset = center minus nub half-width
+  function setNub(dx,dy){
+    const m=Math.hypot(dx,dy); if(m>R){dx=dx*R/m; dy=dy*R/m;}
+    nub.style.left=(R+dx)+'px'; nub.style.top=(R+dy)+'px';
+    joyVec={x:dx/R, y:-dy/R};
+  }
+  function joyMove(e){
+    if(!dragging)return;
+    const rect=joy.getBoundingClientRect();
+    const p=e.touches?e.touches[0]:e;
+    setNub(p.clientX-rect.left-CENTER, p.clientY-rect.top-CENTER);
+  }
+  function joyStart(e){dragging=true; joyMove(e);}
+  function joyEnd(){dragging=false; joyVec={x:0,y:0}; nub.style.left=R+'px'; nub.style.top=R+'px';}
+  joy.addEventListener('pointerdown',joyStart);
+  window.addEventListener('pointermove',joyMove);
+  window.addEventListener('pointerup',joyEnd);
+
+  async function ctl(name,delta){
+    try{ const r=await fetch(`/control/${name}?delta=${delta}`,{method:'POST'});
+      document.getElementById('status').textContent=JSON.stringify(await r.json()); }catch(e){}
+  }
+  setInterval(async()=>{  // status poll ~2 Hz
+    try{
+      const s=await (await fetch('/status')).json();
+      const rb=document.getElementById('risk');
+      rb.textContent='RISK '+s.risk; rb.className='badge '+(s.risk>3?'bad':'ok');
+      const mb=document.getElementById('motor');
+      mb.textContent=s.motor_ok?'motor ok':'motor offline';
+      mb.className='badge '+(s.motor_ok?'ok':'bad');
+    }catch(e){}
+  },500);
+</script>
+</body></html>

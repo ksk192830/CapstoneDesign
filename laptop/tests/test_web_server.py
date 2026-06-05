@@ -50,12 +50,14 @@ def test_frame_bus_publish_then_stream_yields_latest():
     assert b"JPEGDATA" in part
 
 
-def test_index_serves_page_with_feeds():
+def test_index_serves_page_with_feeds_and_controls():
     client, _bus, _pipe, _motor = _client()
     resp = client.get("/")
     assert resp.status_code == 200
     assert b"rgb.mjpg" in resp.data
     assert b"thermal.mjpg" in resp.data
+    assert b"/control/drive" in resp.data   # drive JS present
+    assert b'id="joy"' in resp.data          # on-screen joystick present
 
 
 def test_control_density_adjusts_pipeline():
