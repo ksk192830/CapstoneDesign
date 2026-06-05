@@ -25,3 +25,6 @@ Thumbs.db
 **/.pio/
 firmware/**/managed_components/**/examples/
 firmware/**/managed_components/**/test_apps/
+
+# Never commit real WiFi credentials (kept local per machine)
+firmware/*/src/network/wifi_credentials.h
