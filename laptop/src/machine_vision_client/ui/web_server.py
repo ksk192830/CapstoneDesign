@@ -139,6 +139,12 @@ class HeatWebServer:
                 self._motor.set_vector(x, y, r)
             return jsonify(ok=True)
 
+        @app.route("/control/stop", methods=["POST"])
+        def stop():
+            if self._motor is not None:
+                self._motor.set_vector(0.0, 0.0, 0.0)
+            return jsonify(ok=True)
+
     def start(self) -> threading.Thread:
         thread = threading.Thread(
             target=lambda: self._app.run(

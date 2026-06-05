@@ -103,3 +103,11 @@ def test_control_drive_rejects_non_numeric_vector():
     resp = client.post("/control/drive", json={"x": "fast"})
     assert resp.status_code == 400
     assert motor.calls == []
+
+
+def test_control_stop_zeroes_motor_vector():
+    client, _bus, _pipe, motor = _client()
+    resp = client.post("/control/stop")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert motor.calls == [(0.0, 0.0, 0.0)]
