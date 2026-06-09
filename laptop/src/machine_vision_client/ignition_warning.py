@@ -67,6 +67,11 @@ MIN_RISE_RATE_C_PER_S: float = 0.02
 # reset the whole state machine back to idle.
 COOLDOWN_RESET_S: float = 3.0
 
+# Minimum time an alert phase (WARNING=red, SAFE=green) stays on-screen
+# once shown, so it doesn't flicker away as the rolling fit jitters across
+# the phase boundary. Escalation to WARNING is always allowed immediately.
+ALERT_HOLD_S: float = 3.0
+
 # Fallback AIT (degC) used only when the identified material has no
 # ignition data. Conservative low end of common combustibles.
 FALLBACK_AIT_C: float = 250.0
@@ -83,6 +88,7 @@ class Phase(Enum):
 @dataclass
 class IgnitionTrendMonitor:
     phase: Phase = Phase.IDLE
+    phase_since: float = 0.0                       # when `phase` was entered
     samples: list = field(default_factory=list)   # (t, temp_c) tuples
     window_start: float = 0.0
     last_seen_hot: float = 0.0
@@ -95,6 +101,7 @@ class IgnitionTrendMonitor:
 
     def _reset(self) -> None:
         self.phase = Phase.IDLE
+        self.phase_since = 0.0
         self.samples = []
         self.window_start = 0.0
         self.rise_rate_c_per_s = 0.0
@@ -122,6 +129,7 @@ class IgnitionTrendMonitor:
         if self.phase == Phase.IDLE:
             # Arm: open a fresh measurement window.
             self.phase = Phase.MEASURING
+            self.phase_since = now
             self.window_start = now
             self.samples = [(now, temp)]
             self.ait_c = ignition_threshold_c(mat)
@@ -137,7 +145,7 @@ class IgnitionTrendMonitor:
                 self.material_label = getattr(mat, "label", "") or ""
 
             if (now - self.window_start) >= MEASURE_WINDOW_S and len(self.samples) >= MIN_SAMPLES:
-                self._evaluate(temp)
+                self._evaluate(temp, now)
             return
 
         # In WARNING / MONITORING / SAFE: keep refreshing the estimate on a
@@ -147,9 +155,9 @@ class IgnitionTrendMonitor:
         recent = [s for s in self.samples if s[0] >= cutoff]
         self.samples = recent if len(recent) >= MIN_SAMPLES else self.samples[-MIN_SAMPLES:]
         if len(self.samples) >= MIN_SAMPLES:
-            self._evaluate(temp)
+            self._evaluate(temp, now)
 
-    def _evaluate(self, current_temp: float) -> None:
+    def _evaluate(self, current_temp: float, now: float) -> None:
         """Map the canonical TTI estimate onto a UX phase. All physics
         (least-squares rate, linear extrapolation) comes from
         risk.estimate_tti; this method only owns the UX thresholds."""
@@ -158,30 +166,35 @@ class IgnitionTrendMonitor:
         rate = tti.dt_per_s
         self.rise_rate_c_per_s = rate
 
-        # Already at/above AIT -> immediate warning regardless of slope.
+        # Pick the target phase + eta the current trend would imply.
         if current_temp >= ait:
-            self.eta_to_ait_s = 0.0
-            self.phase = Phase.WARNING
-            return
-
-        # Falling (negative rate) -> cooling down, safe to proceed.
-        if rate <= -MIN_RISE_RATE_C_PER_S:
-            self.eta_to_ait_s = None
-            self.phase = Phase.SAFE
-            return
-
-        # Near-flat (within +/- noise band): not meaningfully changing.
-        if rate < MIN_RISE_RATE_C_PER_S:
-            self.eta_to_ait_s = None
-            self.phase = Phase.MONITORING
-            return
-
-        # Rising -> use the extrapolated TTI; alarm if within horizon.
-        self.eta_to_ait_s = tti.seconds
-        if tti.seconds is not None and 0 < tti.seconds <= HORIZON_S:
-            self.phase = Phase.WARNING       # within horizon -> DISPATCH NOW
+            # Already at/above AIT -> immediate warning regardless of slope.
+            target, eta = Phase.WARNING, 0.0
+        elif rate <= -MIN_RISE_RATE_C_PER_S:
+            # Falling (negative rate) -> cooling down, safe to proceed.
+            target, eta = Phase.SAFE, None
+        elif rate < MIN_RISE_RATE_C_PER_S:
+            # Near-flat (within +/- noise band): not meaningfully changing.
+            target, eta = Phase.MONITORING, None
         else:
-            self.phase = Phase.MONITORING    # rising but still far off
+            # Rising -> use the extrapolated TTI; alarm if within horizon.
+            eta = tti.seconds
+            within = eta is not None and 0 < eta <= HORIZON_S
+            target = Phase.WARNING if within else Phase.MONITORING
+
+        # Latch the red (WARNING) / green (SAFE) alerts on-screen for a
+        # minimum time so they don't flicker away as the rolling fit jitters
+        # across a boundary. Escalating to WARNING is always allowed at once.
+        if (self.phase in (Phase.WARNING, Phase.SAFE)
+                and target is not self.phase
+                and target is not Phase.WARNING
+                and (now - self.phase_since) < ALERT_HOLD_S):
+            return  # keep the current alert showing; eta/rate already updated
+
+        self.eta_to_ait_s = eta
+        if target is not self.phase:
+            self.phase_since = now
+        self.phase = target
 
     def measure_remaining_s(self, now: float) -> float:
         """Seconds left in the measurement window (0 once elapsed)."""

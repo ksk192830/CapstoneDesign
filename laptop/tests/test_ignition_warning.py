@@ -8,6 +8,7 @@ The monitor is pure state — no rendering is exercised here.
 from types import SimpleNamespace
 
 from machine_vision_client.ignition_warning import (
+    ALERT_HOLD_S,
     ARM_THRESHOLD_C,
     COOLDOWN_RESET_S,
     Phase,
@@ -90,6 +91,38 @@ def test_hotspot_gone_past_cooldown_resets_to_idle():
     assert m.phase is Phase.MEASURING
     m.update(None, None, now=COOLDOWN_RESET_S + 1.0)
     assert m.phase is Phase.IDLE
+
+
+def test_alert_phase_held_for_minimum_time():
+    """A shown alert (here WARNING/red) must not flicker away before
+    ALERT_HOLD_S, even when the rolling fit would already imply SAFE."""
+    m = IgnitionTrendMonitor()
+    m.ait_c = 250.0
+    m.phase = Phase.WARNING
+    m.phase_since = 10.0
+    # Cooling samples that on their own would map to SAFE.
+    m.samples = [(10.0, 200.0), (11.0, 180.0), (12.0, 160.0), (13.0, 140.0)]
+
+    # Within the hold window -> WARNING stays on screen.
+    m._evaluate(140.0, 10.0 + ALERT_HOLD_S - 0.5)
+    assert m.phase is Phase.WARNING
+
+    # Past the hold window -> free to fall back to SAFE.
+    m._evaluate(140.0, 10.0 + ALERT_HOLD_S + 0.1)
+    assert m.phase is Phase.SAFE
+
+
+def test_alert_hold_never_delays_escalation_to_warning():
+    """Even mid-hold on a green SAFE alert, crossing the ignition
+    threshold escalates to WARNING immediately (safety overrides the hold)."""
+    m = IgnitionTrendMonitor()
+    m.ait_c = 250.0
+    m.phase = Phase.SAFE
+    m.phase_since = 10.0
+    m.samples = [(10.0, 240.0), (10.3, 250.0), (10.6, 258.0), (10.9, 260.0)]
+
+    m._evaluate(260.0, 10.0 + 0.9)  # well within the hold window
+    assert m.phase is Phase.WARNING
 
 
 def test_measure_remaining_counts_down():
